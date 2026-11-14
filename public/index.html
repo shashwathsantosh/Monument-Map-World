@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Monument Map Atlas — Global Heritage &amp; Conservation Atlas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Karla:ital,wght@0,400..800;1,400..700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="vendor/maplibre-gl.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="map"></div>
+
+  <button class="sidebar-reopen-btn hidden" id="reopen-sidebar-btn" aria-label="Open map search and controls">
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
+    <span>Monument Map Atlas</span>
+  </button>
+
+  <!-- Compact Top-Left Corner Control Card -->
+  <aside class="left-panel" id="left-panel" aria-label="Map info and filters">
+    <div class="left-panel-sticky">
+      <div class="brand-row">
+        <div class="title-stack">
+          <h1 class="brand-title">Monument Map Atlas</h1>
+          <span class="brand-sub" id="visible-count">Loading global heritage atlas...</span>
+        </div>
+        <button class="mini-close panel-collapse-btn" id="collapse-sidebar-btn" title="Minimize controls" aria-label="Minimize controls">✕</button>
+      </div>
+      <p class="brand-desc">Global map tracking UNESCO sites, national heritage registries, conservation alerts, and funding disclosures.</p>
+
+      <div class="quick-bar-row">
+        <button type="button" class="text-btn" id="toggle-filters-btn" aria-expanded="false" aria-controls="filters-drawer">Filters ▾</button>
+        <button type="button" class="text-btn" id="reset-view-btn" title="Center full world map">Center world</button>
+      </div>
+    </div>
+
+    <div class="left-panel-body">
+      <div class="filters-drawer hidden" id="filters-drawer">
+        <details class="filter-group" open>
+          <summary>Country or Territory</summary>
+          <select id="country-select" aria-label="Filter by country or territory">
+            <option value="">All Countries &amp; Territories</option>
+          </select>
+        </details>
+
+        <details class="filter-group hidden" id="region-filter-group" open>
+          <summary>Region or State</summary>
+          <select id="region-select" aria-label="Filter by region or state">
+            <option value="">All Regions</option>
+          </select>
+        </details>
+
+        <div class="filter-toggle-card">
+          <div class="filter-toggle-copy">
+            <span class="filter-toggle-title">Photographed Sites Only</span>
+            <span class="filter-toggle-sub">Hide satellite-only sites without archive photos</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-photos" aria-label="Photographed sites only" />
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+
+        <div class="filter-toggle-card">
+          <div class="filter-toggle-copy">
+            <span class="filter-toggle-title">Country Borders Overlay</span>
+            <span class="filter-toggle-sub">Highlight sovereign &amp; territory boundaries</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-country-borders" checked aria-label="Show country boundary overlay" />
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+
+        <div class="secondary-actions">
+          <button type="button" class="text-btn" id="toggle-budgets-btn" title="Global heritage coverage &amp; conservation overview">Global Coverage</button>
+          <button type="button" class="text-btn" id="toggle-sources-btn" title="Data provenance &amp; attribution">Data Sources</button>
+        </div>
+
+        <!-- Collapsible Data Provenance & Attribution Panel -->
+        <div class="budget-panel hidden" id="sources-panel">
+          <div class="budget-panel-head">
+            <span>Verified Public Data Sources</span>
+            <button class="mini-close" id="close-sources-btn" aria-label="Close sources panel">✕</button>
+          </div>
+          <div class="sources-list">
+            <div><b>Vector Tiles (PMTiles):</b> Global heritage &amp; national registry items queried from Wikidata (P1435 / Q9259) via QLever, Wikipedia &amp; Wikimedia Commons.</div>
+            <div><b>World Heritage:</b> Official UNESCO DataHub (`whc001`) all-country catalog including inscription criteria &amp; In Danger alerts.</div>
+            <div><b>National Deep Layers:</b> Includes all 4,408 India ASI sites, ASI Circle FY 2023–24 budgets, PRASHAD projects &amp; Natural Earth 50m country polygons.</div>
+          </div>
+        </div>
+
+        <!-- Collapsible Country / Conservation Coverage Panel -->
+        <div class="budget-panel hidden" id="budget-panel">
+          <div class="budget-panel-head">
+            <span id="budget-panel-title">Global Heritage Coverage by Country</span>
+            <button class="mini-close" id="close-budgets-btn" aria-label="Close coverage panel">✕</button>
+          </div>
+          <div class="budget-list" id="budget-list"></div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Compact Horizontal Bottom-Left Toggleable Category Pills -->
+  <div class="legend-bar scrolled-start" id="legend-bar-wrap">
+    <button type="button" class="legend-scroll-hint legend-scroll-left" id="legend-scroll-left" aria-label="Scroll categories left" title="Scroll back"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg></button>
+    <div class="legend-track" id="legend-bar" role="group" aria-label="Filter monuments by category">
+      <button type="button" class="legend-btn active" data-legend-filter="all" aria-pressed="true" title="Show all global sites">All</button>
+      <button type="button" class="legend-btn" data-legend-filter="unesco" aria-pressed="false" title="Toggle UNESCO World Heritage sites">
+        <i class="dot dot-unesco"></i>UNESCO
+      </button>
+      <button type="button" class="legend-btn" data-legend-filter="restoration" aria-pressed="false" title="Toggle UNESCO In Danger or active restoration sites">
+        <i class="dot dot-restoration"></i>In Danger / Restoration
+      </button>
+      <button type="button" class="legend-btn" data-legend-filter="mostvisited" aria-pressed="false" title="Toggle iconic high-notability world landmarks">
+        <i class="dot dot-footfall"></i>Most Visited
+      </button>
+      <button type="button" class="legend-btn" data-legend-filter="funded" aria-pressed="false" title="Toggle sites with verified funding or UNESCO protection programs">
+        <i class="dot dot-adopt"></i>Funded / Protected
+      </button>
+      <button type="button" class="legend-btn" data-legend-filter="underfunded" aria-pressed="false" title="Toggle underfunded circles or UNESCO In Danger heritage">
+        <i class="dot dot-underfunded"></i>Underfunded
+      </button>
+      <button type="button" class="legend-btn" data-legend-filter="uncovered" aria-pressed="false" title="Toggle poorly covered sites lacking archive photos and Wikipedia entries">
+        <span class="legend-excl" aria-hidden="true">!</span>Poorly Covered
+      </button>
+      <button type="button" class="legend-btn" data-legend-filter="national" aria-pressed="false" title="Toggle national &amp; regional registry monuments">
+        <i class="dot dot-asi"></i>National Site
+      </button>
+    </div>
+    <button type="button" class="legend-scroll-hint" id="legend-scroll-hint" aria-label="Scroll more categories" title="Scroll categories"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg></button>
+  </div>
+
+  <!-- Minimal slide-in inspector card -->
+  <aside class="detail-drawer hidden" id="detail-drawer" aria-live="polite">
+    <div class="detail-drawer-chrome">
+      <div id="drawer-nearby-slot" class="drawer-nearby-slot"></div>
+      <button class="close-btn" id="close-drawer" aria-label="Close details">✕</button>
+    </div>
+    <div id="detail-content"></div>
+  </aside>
+
+  <!-- Expandable Top-Right Search Icon & Popover -->
+  <div class="search-dock" id="search-dock">
+    <button
+      type="button"
+      class="search-icon-btn"
+      id="search-toggle-btn"
+      aria-label="Open global monument search (/)"
+      aria-expanded="false"
+      aria-controls="search-wrap"
+      title="Search monuments globally (/)"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="11" cy="11" r="7.5"></circle>
+        <path d="M20 20l-4.2-4.2"></path>
+      </svg>
+    </button>
+
+    <div class="search-wrap hidden" id="search-wrap">
+      <div class="search-input-row">
+        <svg class="search-field-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="7.5"></circle>
+          <path d="M20 20l-4.2-4.2"></path>
+        </svg>
+        <input
+          id="search-input"
+          type="search"
+          placeholder="Search monument, city, or country (/)"
+          autocomplete="off"
+          aria-autocomplete="list"
+          aria-controls="search-dropdown"
+          aria-expanded="false"
+        />
+        <button type="button" class="mini-close search-close-btn" id="search-close-btn" aria-label="Close and clear search" title="Close search">✕</button>
+      </div>
+      <div class="search-dropdown hidden" id="search-dropdown" role="listbox"></div>
+    </div>
+  </div>
+
+  <!-- Minimal hover preview card with thumbnail -->
+  <div class="map-tooltip hidden" id="tooltip"></div>
+
+  <script src="vendor/maplibre-gl.js"></script>
+  <script src="vendor/pmtiles.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
