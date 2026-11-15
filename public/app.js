@@ -1,6 +1,6 @@
 // Architecture Monument Atlas — PMTiles Vector Tiles, Global Chronology & Conservation Explorer
 
-const PMTILES_URL = "data/monuments.pmtiles?v=20261114h";
+const PMTILES_URL = "data/monuments.pmtiles?v=20261114m";
 const REPORTS_KEY = "architecture_monument_atlas_reports_v1";
 
 const SITE_COLORS = {
@@ -26,10 +26,10 @@ const ERA_LABELS = {
 };
 
 const CURRENCY_RATES = {
-  USD: { symbol: "$", perInr: 1 / 84.5, unitCr: "M", crToUnit: 0.1183, lakhToUnit: 1183.4 },
-  INR: { symbol: "₹", perInr: 1, unitCr: "Cr", crToUnit: 1, lakhToUnit: 1 },
-  EUR: { symbol: "€", perInr: 1 / 91.5, unitCr: "M", crToUnit: 0.1093, lakhToUnit: 1092.9 },
-  GBP: { symbol: "£", perInr: 1 / 108.0, unitCr: "M", crToUnit: 0.0926, lakhToUnit: 925.9 },
+  USD: { symbol: "$", usdRate: 1, perInr: 1 / 84.5, unitCr: "M", crToUnit: 0.1183, lakhToUnit: 1183.4 },
+  INR: { symbol: "₹", usdRate: 84.5, perInr: 1, unitCr: "Cr", crToUnit: 1, lakhToUnit: 1 },
+  EUR: { symbol: "€", usdRate: 0.924, perInr: 1 / 91.5, unitCr: "M", crToUnit: 0.1093, lakhToUnit: 1092.9 },
+  GBP: { symbol: "£", usdRate: 0.788, perInr: 1 / 108.0, unitCr: "M", crToUnit: 0.0926, lakhToUnit: 925.9 },
 };
 
 const HISTORY_CUE_RE =
@@ -44,6 +44,8 @@ const state = {
   unescoWorld: {},
   searchTop: [],
   indiaExtras: null,
+  globalFunding: null,
+  countryNameToIso: {},
   countryShards: {},
   countryShardPromises: {},
   reports: loadReports(),
@@ -75,6 +77,7 @@ const preloadDataPromise = Promise.all([
   fetch("data/contested-areas.geojson").then((r) => r.json()).catch(() => null),
   fetch("data/india-extras.json").then((r) => r.json()).catch(() => null),
   fetch("data/world-rivers.geojson").then((r) => r.json()).catch(() => null),
+  fetch("data/global-funding.json").then((r) => r.json()).catch(() => null),
 ]);
 
 const plateStyle = {
@@ -104,6 +107,37 @@ const plateStyle = {
     },
   ],
 };
+
+function formatUsdMoney(usdVal, perSite = false) {
+  if (usdVal === null || usdVal === undefined || Number.isNaN(Number(usdVal))) return "—";
+  const cfg = CURRENCY_RATES[state.currency] || CURRENCY_RATES.USD;
+  const suffix = perSite ? " / site" : "";
+  if (state.currency === "INR") {
+    const inr = Number(usdVal) * cfg.usdRate;
+    if (inr >= 1e7) {
+      const cr = inr / 1e7;
+      return `₹${cr >= 100 ? Math.round(cr).toLocaleString() : cr.toFixed(cr >= 10 ? 1 : 2).replace(/\.0+$/, "")} Cr${suffix}`;
+    }
+    if (inr >= 1e5) {
+      const lakh = inr / 1e5;
+      return `₹${lakh.toFixed(lakh >= 10 ? 1 : 2).replace(/\.0+$/, "")}L${suffix}`;
+    }
+    return `₹${Math.round(inr).toLocaleString()}${suffix}`;
+  }
+  const conv = Number(usdVal) * (cfg.usdRate || 1);
+  if (conv >= 1e9) {
+    return `${cfg.symbol}${(conv / 1e9).toFixed(2).replace(/\.?0+$/, "")}B${suffix}`;
+  }
+  if (conv >= 1e6) {
+    const m = conv / 1e6;
+    return `${cfg.symbol}${m >= 100 ? Math.round(m) : m.toFixed(m >= 10 ? 1 : 2).replace(/\.0+$/, "")}M${suffix}`;
+  }
+  if (conv >= 1e3) {
+    const k = conv / 1e3;
+    return `${cfg.symbol}${k >= 20 ? Math.round(k) : k.toFixed(1).replace(/\.0$/, "")}K${suffix}`;
+  }
+  return `${cfg.symbol}${Math.round(conv).toLocaleString()}${suffix}`;
+}
 
 function formatMoneyCr(crVal, compact = false) {
   if (crVal === null || crVal === undefined || Number.isNaN(crVal)) return "—";
@@ -661,21 +695,26 @@ function renderCoveragePanel() {
     return;
   }
 
-  elBudgetPanelTitle.textContent = "Top Countries by Heritage Registry & Photos";
-  const topCountries = [...state.worldSummary.countries].sort((a, b) => b.total - a.total).slice(0, 24);
+  elBudgetPanelTitle.textContent = "Public Heritage Spend per Monument (Global)";
+  const topCountries = [...state.worldSummary.countries]
+    .filter((c) => c.perSiteUsd > 0)
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 32);
+  const maxPerUsd = Math.max(...topCountries.map((c) => Math.min(c.perSiteUsd || 0, 80000)), 1);
   elBudgetList.innerHTML = topCountries
     .map((c) => {
-      const photoPct = c.total ? Math.round((c.photographed / c.total) * 100) : 0;
+      const pct = Math.max(6, Math.min(100, ((c.perSiteUsd || 0) / maxPerUsd) * 100));
+      const low = (c.perSiteUsd || 0) < 3500 || c.fundingTier === "poor";
       return `
         <button type="button" class="budget-item budget-country-btn" data-iso="${escapeHtml(c.iso3)}" style="width:100%; text-align:left; background:transparent; border:none; border-bottom:1px solid var(--border); padding:6px 2px; cursor:pointer;">
           <div class="budget-item-top">
             <span>${escapeHtml(c.name)}</span>
-            <span>${c.total.toLocaleString()} sites</span>
+            <span>${escapeHtml(formatUsdMoney(c.perSiteUsd, true))}</span>
           </div>
           <div class="budget-bar-bg">
-            <div class="budget-bar-fill ${photoPct < 50 ? "is-low" : ""}" style="width:${photoPct}%"></div>
+            <div class="budget-bar-fill ${low ? "is-low" : ""}" style="width:${pct.toFixed(1)}%"></div>
           </div>
-          <div class="budget-item-sub">${c.unesco} UNESCO · ${photoPct}% photographed · ${c.restoration} conservation alerts</div>
+          <div class="budget-item-sub">${escapeHtml(c.shortAgency || "Ministry of Culture")} · ${escapeHtml(formatUsdMoney(c.budgetUsd))} pool · ${c.total.toLocaleString()} sites</div>
         </button>`;
     })
     .join("");
@@ -1292,13 +1331,11 @@ function renderHistoricalSignificanceCard(sig) {
 
 function renderCurrencySwitchHtml() {
   return `
-    <div class="currency-dropdown-wrap">
-      <select id="currency-select" class="currency-select" aria-label="Currency" title="Change display currency">
-        ${Object.entries(CURRENCY_RATES)
-          .map(([c, cfg]) => `<option value="${c}" ${state.currency === c ? "selected" : ""}>${c} (${cfg.symbol})</option>`)
-          .join("")}
-      </select>
-    </div>
+    <select id="currency-select" class="currency-select" aria-label="Display currency" title="Change display currency">
+      ${Object.entries(CURRENCY_RATES)
+        .map(([c, cfg]) => `<option value="${c}" ${state.currency === c ? "selected" : ""}>${c} (${cfg.symbol})</option>`)
+        .join("")}
+    </select>
   `;
 }
 
@@ -1307,8 +1344,224 @@ function bindDrawerCurrencySwitch() {
   if (!sel) return;
   sel.addEventListener("change", () => {
     state.currency = sel.value || "USD";
-    if (state.lastDrawer) openMonumentDrawer(state.lastDrawer.props, state.lastDrawer.coords);
+    renderCoveragePanel();
+    if (state.lastDrawer) openMonumentDrawer(state.lastDrawer.props, state.lastDrawer.coords, false);
   });
+}
+
+const SUBREGION_SKIP_RE =
+  /^(southern europe|western europe|northern europe|eastern europe|central europe|south america|north america|central america|caribbean|eastern asia|south-eastern asia|southern asia|western asia|central asia|northern africa|western africa|eastern africa|middle africa|southern africa|sub-saharan africa|australia and new zealand|melanesia|polynesia|micronesia|americas|europe|asia|africa|oceania)$/i;
+
+function dedupeSubtitleParts(parts) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of parts) {
+    for (const seg of String(raw || "").split(",")) {
+      const clean = seg.replace(/\s+/g, " ").trim();
+      if (!clean || SUBREGION_SKIP_RE.test(clean)) continue;
+      const key = clean.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(clean);
+    }
+  }
+  return out;
+}
+
+function formatConciseFundingNote(rawNote) {
+  let clean = String(rawNote || "").replace(/^[>\s]+/, "").replace(/\s+/g, " ").trim();
+  if (!clean) return "";
+  if (clean.length <= 138) return clean;
+  const firstSent = clean.match(/^[^.!?]+[.!?]/);
+  if (firstSent && firstSent[0].length >= 40 && firstSent[0].length <= 150) {
+    return firstSent[0].trim();
+  }
+  const cut = clean.slice(0, 134).replace(/[,;:\s]+\S*$/, "").replace(/\([^)]*$/, "").trim();
+  return `${cut}…`;
+}
+
+function resolveCountryFunding(props) {
+  const gf = state.globalFunding;
+  if (!gf || !gf.countries) return null;
+  if (props.countryIso && gf.countries[props.countryIso]) {
+    return gf.countries[props.countryIso];
+  }
+  if (props.country) {
+    const iso = state.countryNameToIso[String(props.country).trim().toLowerCase()];
+    if (iso && gf.countries[iso]) return gf.countries[iso];
+  }
+  return null;
+}
+
+function buildFundingModel(props) {
+  const gf = state.globalFunding || {};
+  const siteFund = (props.qid && gf.sites && gf.sites[props.qid]) || null;
+  const unescoGrant = (props.unescoId && gf.unescoGrants && gf.unescoGrants[String(props.unescoId)]) || null;
+  const cf = resolveCountryFunding(props);
+
+  // 1) Direct audited monument revenue / restoration budget / autonomous park budget
+  if (siteFund && !siteFund.isTrustPool) {
+    const isDanger = Boolean(props.unescoDanger);
+    return {
+      tierClass: isDanger ? "tier-poor" : "tier-good",
+      tierLabel: isDanger ? "Emergency Aid · In Danger" : "Audited Site Budget",
+      meterClass: isDanger ? "is-poor" : "is-good",
+      meterPct: isDanger ? 34 : 92,
+      leftLabel: siteFund.metricLabel || "Audited Site Budget",
+      leftVal: formatUsdMoney(siteFund.usd),
+      leftSub: [siteFund.fy, siteFund.local].filter(Boolean).join(" · ") || siteFund.steward || "Published financial report",
+      rightLabel: props.circleExpCr ? "ASI Circle Pool" : "National Heritage Pool",
+      rightVal: props.circleExpCr
+        ? formatMoneyCr(props.circleExpCr, true)
+        : cf
+          ? formatUsdMoney(cf.budgetUsd)
+          : formatUsdMoney(siteFund.usd),
+      rightSub: props.circleExpCr
+        ? `${props.circleName || "ASI Circle"} · FY 2023–24`
+        : cf
+          ? `${cf.shortAgency} · ${cf.fy}`
+          : siteFund.steward || "Statutory Steward",
+      note: siteFund.note || `Audited financials via ${siteFund.steward || "official monument authority"}.`,
+      sourceUrl: siteFund.sourceUrl || cf?.sourceUrl || "",
+      sourceLabel: "Financial Report",
+    };
+  }
+
+  // 2) India ASI Circle & Domestic Ticketed Monuments (exact India Dharohar parity)
+  if (props.revenueCr || props.circlePerSiteLakh) {
+    const low = Boolean(props.underfundedCircle || props.unescoDanger);
+    const hasRev = Boolean(props.revenueCr);
+    const pct = hasRev ? 90 : Math.max(18, Math.min(88, Math.round((Number(props.circlePerSiteLakh || 10) / 45) * 100)));
+    return {
+      tierClass: low ? "tier-poor" : "tier-good",
+      tierLabel: hasRev ? "Audited Ticket Revenue" : low ? "Underfunded Circle" : "ASI Circle Funded",
+      meterClass: low ? "is-poor" : "is-good",
+      meterPct: pct,
+      leftLabel: hasRev ? "Annual Ticket Yield" : "Avg Circle Spend / Site",
+      leftVal: hasRev ? formatMoneyCr(props.revenueCr, true) : formatMoneyLakh(props.circlePerSiteLakh || 0, true),
+      leftSub: hasRev ? `${props.ticketFy || "FY 2023–24"} · ASI Receipt` : `${props.circleName || "ASI Circle"} average`,
+      rightLabel: "ASI Circle Allocation",
+      rightVal: props.circleExpCr ? formatMoneyCr(props.circleExpCr, true) : cf ? formatUsdMoney(cf.budgetUsd) : formatMoneyCr(1245, true),
+      rightSub: `${props.circleName || "Ministry of Culture"} · FY 2023–24`,
+      note: props.adoptPartner
+        ? `Partnered with ${props.adoptPartner} (${props.adoptScope || "Adopt a Heritage 2.0"}) alongside ASI Circle conservation.`
+        : "Audited Archaeological Survey of India (ASI) Circle conservation outlay & Ministry of Culture Demand for Grants.",
+      sourceUrl: cf?.sourceUrl || "https://indiaculture.gov.in/",
+      sourceLabel: "Ministry of Culture",
+    };
+  }
+
+  // 3) Operating Heritage Trust Pool (e.g. National Trust, English Heritage, Historic Environment Scotland)
+  if (siteFund && siteFund.isTrustPool) {
+    return {
+      tierClass: "tier-good",
+      tierLabel: "Heritage Trust Funded",
+      meterClass: "is-good",
+      meterPct: 84,
+      leftLabel: siteFund.metricLabel || "Operating Trust Pool",
+      leftVal: formatUsdMoney(siteFund.usd),
+      leftSub: siteFund.steward || "Dedicated heritage trust",
+      rightLabel: cf ? "National Avg / Site" : "National Pool",
+      rightVal: cf ? formatUsdMoney(cf.perSiteUsd, true) : formatUsdMoney(siteFund.usd),
+      rightSub: cf ? `${cf.shortAgency} · ${cf.fy}` : "Statutory Registry",
+      note: siteFund.note || `Maintained under ${siteFund.steward}'s published conservation budget.`,
+      sourceUrl: siteFund.sourceUrl || cf?.sourceUrl || "",
+      sourceLabel: "Trust Accounts",
+    };
+  }
+
+  // 4) Audited UNESCO Culture Project Grant (UNESCO DataHub prj001) + National Pool
+  if (unescoGrant && unescoGrant.usd > 0) {
+    const isDanger = Boolean(props.unescoDanger);
+    return {
+      tierClass: isDanger ? "tier-avg" : "tier-good",
+      tierLabel: isDanger ? "Emergency UNESCO Grant" : "UNESCO + National Funded",
+      meterClass: isDanger ? "is-avg" : "is-good",
+      meterPct: isDanger ? 48 : 82,
+      leftLabel: "UNESCO Project Grant",
+      leftVal: formatUsdMoney(unescoGrant.usd),
+      leftSub: `${unescoGrant.count} active grant${unescoGrant.count > 1 ? "s" : ""} · WHC Culture`,
+      rightLabel: "National Heritage Pool",
+      rightVal: cf ? formatUsdMoney(cf.budgetUsd) : formatUsdMoney(unescoGrant.usd),
+      rightSub: cf ? `${formatUsdMoney(cf.perSiteUsd, true)} · ${cf.shortAgency}` : "State Party Stewardship",
+      note: unescoGrant.projectTitle
+        ? `UNESCO grant: "${unescoGrant.projectTitle}" alongside national statutory protection.`
+        : "Funded through UNESCO Culture Sector international assistance and State Party heritage budget.",
+      sourceUrl: "https://data.unesco.org/explore/dataset/prj001/",
+      sourceLabel: "UNESCO Grants",
+    };
+  }
+
+  // 5) National / Regional Agency Stewardship Pool per Monument (100% Global Parity across 193 countries)
+  if (cf) {
+    const isDanger = Boolean(props.unescoDanger);
+    const physRisk = Boolean(props.underfunded && props.conservationState);
+    let tierClass = cf.tier === "good" ? "tier-good" : cf.tier === "avg" ? "tier-avg" : "tier-poor";
+    let meterClass = cf.tier === "good" ? "is-good" : cf.tier === "avg" ? "is-avg" : "is-poor";
+    let tierLabel =
+      cf.tier === "good"
+        ? "Well-Funded Registry"
+        : cf.tier === "avg"
+          ? "Moderate Stewardship"
+          : "Underfunded Pool";
+
+    let meterPct =
+      cf.tier === "good"
+        ? Math.min(88, Math.max(62, Math.round((Math.log10(Math.max(cf.perSiteUsd, 1000)) - 3) * 42)))
+        : cf.tier === "avg"
+          ? 52
+          : 26;
+
+    if (isDanger) {
+      tierClass = "tier-poor";
+      meterClass = "is-poor";
+      tierLabel = "Emergency Aid Needed";
+      meterPct = 22;
+    } else if (physRisk) {
+      tierClass = "tier-poor";
+      meterClass = "is-poor";
+      tierLabel = "Conservation Risk";
+      meterPct = 28;
+    } else if (props.unesco && cf.tier !== "good") {
+      tierClass = "tier-avg";
+      meterClass = "is-avg";
+      tierLabel = "UNESCO + State Pool";
+      meterPct = Math.max(meterPct, 56);
+    }
+
+    return {
+      tierClass,
+      tierLabel,
+      meterClass,
+      meterPct,
+      leftLabel: "Avg Public Spend / Site",
+      leftVal: formatUsdMoney(cf.perSiteUsd, true),
+      leftSub: `~${(cf.statutorySites || cf.atlasSites || 1).toLocaleString()} protected sites (${cf.fy})`,
+      rightLabel: "National Heritage Budget",
+      rightVal: formatUsdMoney(cf.budgetUsd),
+      rightSub: [cf.shortAgency, cf.localLabel].filter(Boolean).join(" · "),
+      note: cf.note,
+      sourceUrl: cf.sourceUrl || "",
+      sourceLabel: "Official Budget",
+    };
+  }
+
+  // 6) Fallback for remote unindexed coordinates (e.g. live Wikidata search in international territory)
+  return {
+    tierClass: "tier-avg",
+    tierLabel: "Multilateral Heritage Pool",
+    meterClass: "is-avg",
+    meterPct: 50,
+    leftLabel: "UNESCO WHF Baseline",
+    leftVal: formatUsdMoney(12500, true),
+    leftSub: "International statutory benchmark",
+    rightLabel: "UNESCO Culture Sector",
+    rightVal: formatUsdMoney(487577389),
+    rightSub: "Global active portfolio (698 projects)",
+    note: "Benchmarked against UNESCO World Heritage Fund & global Culture Sector conservation allocations.",
+    sourceUrl: "https://data.unesco.org/explore/dataset/prj001/",
+    sourceLabel: "UNESCO DataHub",
+  };
 }
 
 function openMonumentFromCoords(rawProps, coords, shouldFly = false) {
@@ -1318,8 +1571,18 @@ function openMonumentFromCoords(rawProps, coords, shouldFly = false) {
     ensureCountryShard(merged.countryIso).then(() => {
       if (state.lastDrawer && state.lastDrawer.props.qid === merged.qid) {
         const refreshed = getMergedProps(merged);
+        const gainedRichData =
+          (refreshed.revenueCr && !merged.revenueCr) ||
+          (refreshed.circlePerSiteLakh && !merged.circlePerSiteLakh) ||
+          (refreshed.architect && !merged.architect) ||
+          (refreshed.patron && !merged.patron) ||
+          (refreshed.wikipedia && !merged.wikipedia);
         state.lastDrawer.props = refreshed;
-        mountDrawerNearbyNav(refreshed, coords);
+        if (gainedRichData) {
+          openMonumentDrawer(refreshed, coords, false);
+        } else {
+          mountDrawerNearbyNav(refreshed, coords);
+        }
       }
     });
   }
@@ -1329,37 +1592,43 @@ function openMonumentDrawer(rawProps, coords, shouldFly = false) {
   const props = getMergedProps(rawProps);
   state.lastDrawer = { props, coords };
   const dateInfo = extractConstructionInfo(props);
-
-  const gaps = [];
-  if (!props.image) gaps.push({ key: "photo", label: "No verified Wikimedia Commons archive photo yet" });
-  if (!props.wikipedia) gaps.push({ key: "wiki", label: "No linked English Wikipedia page" });
-  if (dateInfo.yearNum === null) gaps.push({ key: "date", label: "Construction year / era unverified" });
-  if (!props.circleExpCr && !props.unesco && !props.hasFunding) gaps.push({ key: "budget", label: "Public maintenance budget not disclosed in central registry" });
+  const cachedWd = (props.qid && state.wdFactsCache[props.qid]) || null;
+  const effectiveDate = cachedWd?.rawYear !== undefined && cachedWd?.rawYear !== null ? extractConstructionInfo(props, cachedWd.rawYear) : dateInfo;
 
   const hasPhoto = Boolean(props.image);
-  const badgeText = !hasPhoto ? "! Poorly Covered" : gaps.length ? "Partial Coverage" : "Well Documented";
-  const badgeClass = !hasPhoto ? "is-uncovered" : gaps.length ? "is-partial" : "is-full";
+  const visCount = props.annualVisitors || (props.footfallLakhs ? Math.round(Number(props.footfallLakhs) * 100000) : null);
 
-  const kpiCards = [];
-  kpiCards.push({
-    label: "Built / Age",
-    val: dateInfo.builtLabel,
-    sub: dateInfo.ageLabel,
-    accent: "",
-    valId: "drawer-age-val",
-    subId: "drawer-age-sub",
-  });
+  // 1) Clean deduplicated Apple Maps Kicker: Type · City, Region, Country
+  const placeParts = dedupeSubtitleParts([props.location, props.region, props.country]);
+  const cleanType =
+    props.siteType && props.siteType.toLowerCase() !== "monument"
+      ? props.siteType
+      : props.unescoCategory
+        ? `${props.unescoCategory} Monument`
+        : "Architectural Monument";
+  const kickerText = [cleanType, placeParts.join(", ")].filter(Boolean).join(" · ");
 
-  if (props.unesco) {
-    kpiCards.push({
-      label: props.unescoDanger ? "UNESCO Status" : "UNESCO Listed",
-      val: props.unescoDanger ? "In Danger" : props.unescoYear || "Inscribed",
-      sub: props.unescoCategory || "World Heritage",
-      accent: props.unescoDanger ? "color: var(--c-underfunded)" : "color: var(--c-unesco)",
-    });
+  // 2) Concise non-redundant Apple Status Pills (max 3)
+  const pills = [];
+  if (props.unescoDanger) {
+    pills.push(`<span class="apple-pill pill-danger">UNESCO In Danger</span>`);
+  } else if (props.unesco) {
+    pills.push(`<span class="apple-pill pill-unesco">UNESCO${props.unescoYear ? ` · ${escapeHtml(props.unescoYear)}` : ""}</span>`);
+  }
+  if (props.asiId) {
+    pills.push(`<span class="apple-pill">${String(props.asiId).toUpperCase().startsWith("S-") ? "State" : "ASI"} ${escapeHtml(props.asiId)}</span>`);
+  }
+  if (props.contested) {
+    pills.push(`<span class="apple-pill pill-contested">Contested${props.contestedArea ? ` · ${escapeHtml(props.contestedArea)}` : ""}</span>`);
+  }
+  if (!hasPhoto) {
+    pills.push(`<span class="apple-pill pill-uncovered" id="coverage-badge">! No Archive Photo</span>`);
   }
 
-  const visCount = props.annualVisitors || (props.footfallLakhs ? Math.round(Number(props.footfallLakhs) * 100000) : null);
+  // 3) 3-Column Apple Maps Glance Strip (BUILT | VISITORS/AREA/ERA | CONDITION) — Zero overlap with cards below
+  let midLabel = "Era";
+  let midVal = props.era && props.era !== "unk" ? ERA_LABELS[props.era].split(" (")[0] : "Historic";
+  let midSub = props.era && props.era !== "unk" && ERA_LABELS[props.era].includes("(") ? ERA_LABELS[props.era].replace(/^[^(]+\(|\)$/g, "") : "Built structure";
   if (visCount) {
     const compactVis =
       visCount >= 1_000_000
@@ -1367,311 +1636,214 @@ function openMonumentDrawer(rawProps, coords, shouldFly = false) {
         : visCount >= 1_000
           ? `${Math.round(visCount / 1_000)}K`
           : String(visCount);
-    kpiCards.push({
-      label: "Annual Visitors",
-      val: compactVis,
-      sub: `~${visCount.toLocaleString()} / yr`,
-      accent: "color: var(--c-footfall)",
-    });
+    midLabel = "Visitors";
+    midVal = compactVis;
+    midSub = "Annual footfall";
+  } else if (props.unescoAreaHa) {
+    midLabel = "Protected Zone";
+    midVal = `${Math.round(Number(props.unescoAreaHa)).toLocaleString()} ha`;
+    midSub = "UNESCO boundary";
   }
 
-  if (props.revenueCr) {
-    kpiCards.push({
-      label: "Ticket Revenue",
-      val: formatMoneyCr(props.revenueCr, true),
-      sub: props.ticketFy || "Annual ticket receipt",
-      accent: "",
-    });
-  } else if (props.circlePerSiteLakh) {
-    kpiCards.push({
-      label: "Site Budget (Est.)",
-      val: formatMoneyLakh(props.circlePerSiteLakh, true),
-      sub: props.circleName || "ASI FY 2023–24",
-      accent: props.underfundedCircle ? "color: var(--c-underfunded)" : "color: var(--c-adopt)",
-    });
-  } else if (props.unescoAreaHa && kpiCards.length < 3) {
-    kpiCards.push({
-      label: "Protected Area",
-      val: `${Math.round(Number(props.unescoAreaHa)).toLocaleString()} ha`,
-      sub: "UNESCO boundary",
-      accent: "",
-    });
-  }
-
-  const metaRows = [];
-  metaRows.push(["Government Recognition", props.heritageDesignation || "Government-Recognized Heritage"]);
-  if (props.unesco) metaRows.push(["UNESCO World Heritage", `${props.unesco}${props.unescoYear ? ` (${props.unescoYear})` : ""}`]);
-  if (props.unescoCriteria) metaRows.push(["UNESCO Criteria", props.unescoCriteria]);
-  if (visCount) metaRows.push(["Annual Visitors", `~${visCount.toLocaleString()} / yr${visCount >= 500000 ? " (Most Visited 500K+)" : ""}`]);
-  metaRows.push(["Built / Historical Date", dateInfo.builtLabel]);
-  metaRows.push(["Monument Age", dateInfo.ageLabel]);
-  if (props.siteType) metaRows.push(["Category", props.siteType]);
-  if (props.style) metaRows.push(["Architecture", props.style]);
-  if (props.material) metaRows.push(["Material", props.material]);
-  if (props.period) metaRows.push(["Historical Period", props.period]);
-  if (props.architect) metaRows.push(["Architect", props.architect]);
-  if (props.patron) metaRows.push(["Patron", props.patron]);
-  if (props.location) metaRows.push(["City / Locality", props.location]);
-  if (props.region) metaRows.push(["Region / State", props.region]);
-  if (props.country) metaRows.push(["Country / Territory", props.country]);
-  if (props.contestedArea) metaRows.push(["Contested Territory", props.contestedArea]);
-  if (props.circleName) metaRows.push(["ASI Circle", props.circleName]);
-
-  const initialSig = buildHistoricalSignificance(props, dateInfo, null, null);
-
-  let statusClass = "is-routine";
-  let statusText = "Registry Monitored";
-  let statusNote = "Listed under national or international architectural protection with no active crisis alert.";
+  let condVal = "Protected";
+  let condSub = "Statutory care";
+  let condAccent = "color: #15803d;";
   if (props.unescoDanger) {
-    statusClass = "is-underfunded";
-    statusText = "UNESCO In Danger";
-    statusNote = "Flagged on the official UNESCO List of World Heritage in Danger requiring urgent conservation.";
+    condVal = "In Danger";
+    condSub = "UNESCO alert";
+    condAccent = "color: #c62828;";
   } else if (props.inRestoration || props.adoptPartner) {
-    statusClass = "is-active";
-    statusText = props.adoptPartner ? `Partnered (${props.adoptPartner})` : props.conservationState || "Active Conservation";
-    statusNote = props.adoptScope || "Ongoing heritage conservation / restoration program recorded.";
-  } else if (props.underfundedCircle) {
-    statusClass = "is-underfunded";
-    statusText = "Underfunded Circle";
-    statusNote = "Situated in an ASI circle averaging below ₹8.5L per monument in FY 2023–24.";
+    condVal = "Restoring";
+    condSub = props.adoptPartner ? props.adoptPartner : "Active works";
+    condAccent = "color: #7e22ce;";
   } else if (props.underfunded && props.conservationState) {
-    statusClass = "is-underfunded";
-    statusText = `Conservation Alert (${props.conservationState})`;
-    statusNote = `Recorded in Wikidata P5816 state of conservation as "${props.conservationState}".`;
+    condVal = props.conservationState.charAt(0).toUpperCase() + props.conservationState.slice(1);
+    condSub = "Conservation alert";
+    condAccent = "color: #c62828;";
+  } else if (props.underfundedCircle) {
+    condVal = "Stretched";
+    condSub = "Low circle pool";
+    condAccent = "color: #b45309;";
   }
 
+  // 4) Global Two-Layer Funding Health Card
+  const fm = buildFundingModel(props);
+  const fundingHealthHtml = `
+    <section class="apple-section-card" id="funding-health-card" aria-label="Funding Health">
+      <div class="apple-section-head">
+        <div class="apple-section-head-left">
+          <span class="apple-section-title">Funding Health</span>
+          <span class="funding-tier-badge ${fm.tierClass}">${escapeHtml(fm.tierLabel)}</span>
+        </div>
+        ${renderCurrencySwitchHtml()}
+      </div>
+      <div class="budget-split-grid">
+        <div class="budget-split-box">
+          <span class="budget-split-label">${escapeHtml(fm.leftLabel)}</span>
+          <span class="budget-split-val">${escapeHtml(fm.leftVal)}</span>
+          <span class="budget-split-sub">${escapeHtml(fm.leftSub)}</span>
+        </div>
+        <div class="budget-split-box">
+          <span class="budget-split-label">${escapeHtml(fm.rightLabel)}</span>
+          <span class="budget-split-val">${escapeHtml(fm.rightVal)}</span>
+          <span class="budget-split-sub">${escapeHtml(fm.rightSub)}</span>
+        </div>
+      </div>
+      <div class="funding-meter-track" role="progressbar" aria-valuenow="${fm.meterPct}" aria-valuemin="0" aria-valuemax="100">
+        <div class="funding-meter-fill ${fm.meterClass}" style="width:${fm.meterPct}%"></div>
+      </div>
+      <div class="funding-source-foot">
+        <span class="funding-source-note">${escapeHtml(formatConciseFundingNote(fm.note))}</span>
+        ${fm.sourceUrl ? `<a class="funding-source-link" href="${escapeHtml(fm.sourceUrl)}" target="_blank" rel="noopener">${escapeHtml(fm.sourceLabel)} ↗</a>` : ""}
+      </div>
+    </section>
+  `;
+
+  // 5) Architecture & Recognition Card — Strictly non-repeated architectural & statutory facts
+  const rawDes = String(props.heritageDesignation || "").trim();
+  const isGenericDes = !rawDes || /^(Government-Recognized Heritage|National Architectural Heritage|Government-Designated Heritage|UNESCO World Heritage Site)$/i.test(rawDes);
+  const recognitionVal = [
+    !isGenericDes ? rawDes : props.asiId ? "Archaeological Survey of India (ASI)" : `${props.country || "National"} Heritage Register`,
+    props.unescoCriteria ? `UNESCO ${props.unescoCriteria}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const initArchitect = cachedWd?.architect || props.architect || "";
+  const initPatron = cachedWd?.patron || props.patron || cachedWd?.foundedBy || cachedWd?.creator || "";
+  const initBuilderVal = dedupeSubtitleParts([initArchitect, initPatron]).join(" · ");
+  const initStyle = cachedWd?.style || props.style || "";
+  const initMaterial = cachedWd?.material || props.material || "";
+  const initPeriod = cachedWd?.timePeriod || props.period || "";
+  const showPeriod = Boolean(initPeriod && initPeriod.toLowerCase() !== initStyle.toLowerCase());
+  const ticketVal =
+    props.ticketIndianInr || props.ticketForeignInr
+      ? formatTicketPair(props.ticketIndianInr, props.ticketForeignInr)
+      : "";
+
+  let unescoNote = "";
+  if (props.unescoJustification) {
+    const firstSent = props.unescoJustification.match(/[^.!?]+[.!?]+/);
+    if (firstSent && firstSent[0].trim().length <= 230) {
+      unescoNote = firstSent[0].trim();
+    }
+  }
+
+  // 6) Clean Bottom Hyperlinks ONLY (Wikipedia strictly at the bottom)
   const extLinks = [];
-  if (props.wikipedia) extLinks.push(`<a class="detail-link" data-link-kind="wikipedia" href="${escapeHtml(props.wikipedia)}" target="_blank" rel="noopener">Wikipedia ↗</a>`);
-  if (props.qid && /^Q\d+$/i.test(props.qid)) extLinks.push(`<a class="detail-link" href="https://www.wikidata.org/wiki/${encodeURIComponent(props.qid)}" target="_blank" rel="noopener">Wikidata ↗</a>`);
-  if (props.unescoId) extLinks.push(`<a class="detail-link" href="https://whc.unesco.org/en/list/${encodeURIComponent(props.unescoId)}" target="_blank" rel="noopener">UNESCO WHC #${escapeHtml(props.unescoId)} ↗</a>`);
+  const cachedWikiUrl = state.wikiCache[props.qid || props.name]?.url || "";
+  const wikiHref = props.wikipedia || (/^https?:\/\/[^.]+\.wikipedia\.org\//i.test(cachedWikiUrl) ? cachedWikiUrl : "");
+  if (wikiHref) {
+    extLinks.push(`<a class="detail-link" data-link-kind="wikipedia" href="${escapeHtml(wikiHref)}" target="_blank" rel="noopener">Wikipedia ↗</a>`);
+  }
+  if (props.unescoId) {
+    extLinks.push(`<a class="detail-link" href="https://whc.unesco.org/en/list/${encodeURIComponent(props.unescoId)}" target="_blank" rel="noopener">UNESCO #${escapeHtml(props.unescoId)} ↗</a>`);
+  }
+  if (props.qid && /^Q\d+$/i.test(props.qid)) {
+    extLinks.push(`<a class="detail-link" href="https://www.wikidata.org/wiki/${encodeURIComponent(props.qid)}" target="_blank" rel="noopener">Wikidata ↗</a>`);
+  }
   extLinks.push(
     `<a class="detail-link" href="https://commons.wikimedia.org/w/index.php?search=${encodeURIComponent(
       `${props.name} ${props.country || ""}`.trim()
     )}" target="_blank" rel="noopener">Commons ↗</a>`
   );
-
-  const badges = [];
-  if (props.asiId) badges.push(`<span class="badge">${String(props.asiId).toUpperCase().startsWith("S-") ? "State" : "ASI"} ${escapeHtml(props.asiId)}</span>`);
-  else if (props.heritageDesignation) {
-    const shortDes = String(props.heritageDesignation).length > 26
-      ? `${String(props.heritageDesignation).slice(0, 24).trim()}…`
-      : String(props.heritageDesignation);
-    badges.push(`<span class="badge" title="${escapeHtml(props.heritageDesignation)}">${escapeHtml(shortDes)}</span>`);
+  if (fm.sourceUrl) {
+    extLinks.push(`<a class="detail-link" href="${escapeHtml(fm.sourceUrl)}" target="_blank" rel="noopener">Budget Source ↗</a>`);
   }
-  if (props.unesco) badges.push(`<span class="badge badge-unesco">UNESCO World Heritage${props.unescoYear ? ` · ${escapeHtml(props.unescoYear)}` : ""}</span>`);
-  if (props.contested) badges.push(`<span class="badge badge-flagged">Contested Territory</span>`);
-  if (props.isMostVisited) badges.push(`<span class="badge badge-footfall">Most Visited (500K+)</span>`);
-  if (props.hasFunding && !props.underfunded) badges.push(`<span class="badge badge-adopt">Funded / Protected</span>`);
-  if (!hasPhoto) badges.push(`<span class="badge badge-uncovered" id="coverage-badge"><span class="legend-excl" aria-hidden="true">!</span>Poorly Covered · No Photo</span>`);
 
   const reports = state.reports[props.qid] || [];
   const issueOptions = [
-    "Structural Decay / Cracks",
-    "Encroachment / Buffer Risk",
-    "Missing Signage / Lighting",
-    "Sanitation / Visitor Amenities",
+    "Structural Decay",
+    "Buffer Encroachment",
+    "Missing Signage",
+    "Visitor Amenities",
     "Restoration Verified",
   ];
   let selectedIssue = issueOptions[0];
 
-  let fundingTierClass = "tier-unknown";
-  let fundingTierLabel = "Public Registry · Undisclosed";
-  let fundingLeftLabel = "Site Allocation";
-  let fundingLeftVal = "Not Line-Itemed";
-  let fundingLeftSub = `Statutory protection via ${props.country || "national"} heritage budget; site-level outlay unpublished`;
-  let fundingRightLabel = "Steward / Authority";
-  let fundingRightVal = props.heritageDesignation || `${props.country || "National"} Heritage Registry`;
-  let fundingRightSub = `${props.country || "National"} Ministry / Trust`;
-  let fundingCitation = "Evaluated from UNESCO World Heritage Fund / Danger records, Wikidata P5816 conservation state & patronage, and national statutory heritage registries.";
-
-  if (props.circlePerSiteLakh || props.revenueCr) {
-    fundingTierClass = props.underfundedCircle ? "tier-poor" : "tier-good";
-    fundingTierLabel = props.underfundedCircle ? "Underfunded Circle" : "Budget Disclosed";
-    fundingLeftLabel = "Site / Ticket Estimate";
-    fundingLeftVal = props.revenueCr ? formatMoneyCr(props.revenueCr, true) : formatMoneyLakh(props.circlePerSiteLakh || 0, true);
-    fundingLeftSub = props.revenueCr ? props.ticketFy || "Annual ticket revenue" : props.circleName || "Circle average";
-    fundingRightLabel = "ASI Circle";
-    fundingRightVal = props.circleExpCr ? formatMoneyCr(props.circleExpCr, true) : "—";
-    fundingRightSub = props.circleName || "Ministry of Culture FY 2023–24";
-    fundingCitation = "FY 2023–24 PIB circle budgets, Adopt a Heritage 2.0 & PRASHAD.";
-  } else if (props.unescoDanger) {
-    fundingTierClass = "tier-poor";
-    fundingTierLabel = "Emergency Aid Needed";
-    fundingLeftVal = "Critical Shortfall";
-    fundingLeftSub = "Inscribed on the UNESCO List of World Heritage in Danger; urgent international conservation aid flagged";
-    fundingRightVal = "UNESCO WHF + National Govt";
-    fundingRightSub = props.heritageDesignation || "Emergency Assistance Eligible";
-  } else if (props.underfunded) {
-    fundingTierClass = "tier-poor";
-    fundingTierLabel = "Conservation / Funding Risk";
-    fundingLeftVal = "Underfunded / At Risk";
-    fundingLeftSub = props.conservationState ? `Wikidata conservation status: ${props.conservationState}` : "Maintenance or conservation resource gap recorded";
-    fundingRightVal = props.unesco ? "UNESCO + National Registry" : `${props.country || "National"} Ministry`;
-    fundingRightSub = props.heritageDesignation || "National Statutory Protection";
-  } else if (props.hasFunding || props.unesco || props.adoptPartner) {
-    fundingTierClass = "tier-good";
-    fundingTierLabel = props.adoptPartner ? "Sponsor / Grant Funded" : props.unesco ? "UNESCO + National Funded" : "Government Funded";
-    fundingLeftVal = props.adoptPartner ? `Partner: ${props.adoptPartner}` : "Active Grant / Program";
-    fundingLeftSub = props.adoptScope || (props.unesco ? "Eligible for UNESCO World Heritage Fund & national conservation outlays" : "Dedicated national conservation or restoration funding verified");
-    fundingRightVal = props.unesco ? "UNESCO WHC + National Govt" : `${props.country || "National"} Heritage Trust`;
-    fundingRightSub = props.heritageDesignation || "Protected Budget Allocation";
-  }
-
-  const fundingHealthHtml = `
-    <div class="funding-health-card">
-      <div class="funding-health-head">
-        <span class="funding-health-title">Funding Health</span>
-        <span class="funding-tier-badge ${fundingTierClass}">${escapeHtml(fundingTierLabel)}</span>
-      </div>
-      <div class="budget-split-grid">
-        <div class="budget-split-box">
-          <span class="budget-split-label">${escapeHtml(fundingLeftLabel)}</span>
-          <span class="budget-split-val">${escapeHtml(fundingLeftVal)}</span>
-          <span class="budget-split-sub">${escapeHtml(fundingLeftSub)}</span>
-        </div>
-        <div class="budget-split-box">
-          <span class="budget-split-label">${escapeHtml(fundingRightLabel)}</span>
-          <span class="budget-split-val">${escapeHtml(fundingRightVal)}</span>
-          <span class="budget-split-sub">${escapeHtml(fundingRightSub)}</span>
-        </div>
-      </div>
-      ${citeHtml(fundingCitation)}
-    </div>
-  `;
-
-  const recognitionBodies = [];
-  const rawDesignation = String(props.heritageDesignation || "").trim();
-  const isGenericDes = !rawDesignation || /^(Government-Recognized Heritage|National Architectural Heritage|Government-Designated Heritage)$/i.test(rawDesignation);
-  const govAuthorityLabel = props.asiId
-    ? `Government of India · ${String(props.asiId).toUpperCase().startsWith("S-") ? "State Archaeology Registry" : "Archaeological Survey of India (ASI)"}`
-    : `${props.country || "National"} Statutory Heritage Registry`;
-  if (props.unesco) {
-    recognitionBodies.push(`UNESCO World Heritage${props.unescoYear ? ` (Inscribed ${props.unescoYear})` : ""}`);
-  }
-  if (!isGenericDes && !/^UNESCO/i.test(rawDesignation)) {
-    recognitionBodies.push(`${rawDesignation} (${govAuthorityLabel})`);
-  } else if (!props.unesco || props.asiId || rawDesignation) {
-    recognitionBodies.push(govAuthorityLabel);
-  }
-  const recognitionPill =
-    props.unesco && !isGenericDes
-      ? "UNESCO + Government"
-      : props.unesco
-        ? "UNESCO Recognized"
-        : "Government Recognized";
-  const recognitionPillClass = props.unesco ? "is-active" : "is-routine";
-  const recognitionHtml = `
-    <div class="restoration-status-row">
-      <div class="funding-health-head" style="margin-bottom:2px;">
-        <span class="funding-health-title">Official Recognition</span>
-        <span class="restoration-status-pill ${recognitionPillClass}">${escapeHtml(recognitionPill)}</span>
-      </div>
-      <div class="budget-split-sub">${escapeHtml(recognitionBodies.join(" · "))}</div>
-    </div>
-  `;
+  const cachedWikiText = state.wikiCache[props.qid || props.name]?.text || "";
 
   elDetailContent.innerHTML = `
     <div id="drawer-media-mount">
-      ${hasPhoto ? renderCarouselHtml([{ url: hiResUrl(props.image), caption: `${props.name} · Primary Archive Photo`, credit: "Wikimedia Commons" }]) : renderSatelliteFallbackHtml(props, coords, true)}
+      ${hasPhoto ? renderCarouselHtml([{ url: hiResUrl(props.image), caption: props.name, credit: "Wikimedia Commons" }]) : renderSatelliteFallbackHtml(props, coords, true)}
     </div>
 
-    <div class="v-head-grid">
-      <div>
-        <h2 class="detail-title">${escapeHtml(props.name)}</h2>
-        <div class="detail-kicker">${escapeHtml([props.location, props.region, props.country].filter(Boolean).join(" · "))}</div>
-      </div>
-    </div>
+    <header class="apple-place-head">
+      <h2 class="detail-title">${escapeHtml(props.name)}</h2>
+      <div class="detail-kicker">${escapeHtml(kickerText)}</div>
+      ${pills.length ? `<div class="apple-pill-row">${pills.slice(0, 3).join("")}</div>` : ""}
+    </header>
 
-    <div class="drawer-subbar">
-      <div class="detail-badges" style="margin:0;">${badges.slice(0, 5).join("")}</div>
-      ${renderCurrencySwitchHtml()}
-    </div>
-
-    <div class="detail-desc" id="wiki-summary-mount">
+    <div class="apple-summary" id="wiki-summary-mount">
       ${
-        state.wikiCache[props.qid || props.name]?.text
-          ? escapeHtml(state.wikiCache[props.qid || props.name].text)
-          : `<div class="skeleton-block" aria-label="Loading site summary"><span class="skeleton-line w-full"></span><span class="skeleton-line w-88"></span><span class="skeleton-line w-72"></span></div>`
+        cachedWikiText
+          ? escapeHtml(cachedWikiText)
+          : `<div class="skeleton-block" aria-label="Loading site summary"><span class="skeleton-line w-full"></span><span class="skeleton-line w-88"></span></div>`
       }
     </div>
-    ${citeHtml("Synthesized from UNESCO, Wikidata, and linked Wikipedia lead summary.")}
-    <div style="margin-bottom:14px;"></div>
 
-    <div class="kpi-strip${kpiCards.length >= 4 ? " is-four" : ""}">
-      ${kpiCards
-        .slice(0, 4)
-        .map(
-          (k) => `
-        <div class="kpi-card">
-          <span class="kpi-label">${escapeHtml(k.label)}</span>
-          <span class="kpi-val" ${k.valId ? `id="${escapeHtml(k.valId)}"` : ""} ${k.accent ? `style="${k.accent}"` : ""}>${escapeHtml(k.val)}</span>
-          <span class="kpi-sub" ${k.subId ? `id="${escapeHtml(k.subId)}"` : ""}>${escapeHtml(k.sub)}</span>
-        </div>`
-        )
-        .join("")}
+    <div class="apple-glance-strip" aria-label="Key monument facts">
+      <div class="apple-glance-cell">
+        <span class="apple-glance-label">Built</span>
+        <span class="apple-glance-val" id="drawer-age-val">${escapeHtml(effectiveDate.builtLabel)}</span>
+        <span class="apple-glance-sub" id="drawer-age-sub">${escapeHtml(effectiveDate.ageLabel)}</span>
+      </div>
+      <div class="apple-glance-cell">
+        <span class="apple-glance-label">${escapeHtml(midLabel)}</span>
+        <span class="apple-glance-val">${escapeHtml(midVal)}</span>
+        <span class="apple-glance-sub">${escapeHtml(midSub)}</span>
+      </div>
+      <div class="apple-glance-cell">
+        <span class="apple-glance-label">Condition</span>
+        <span class="apple-glance-val" style="${condAccent}">${escapeHtml(condVal)}</span>
+        <span class="apple-glance-sub">${escapeHtml(condSub)}</span>
+      </div>
     </div>
-
-    <div id="history-sig-mount">${
-      !props.qid || state.wdFactsCache[props.qid]
-        ? initialSig
-          ? renderHistoricalSignificanceCard(initialSig)
-          : ""
-        : `<div class="skeleton-card" aria-label="Loading historical context"><div class="skeleton-block"><span class="skeleton-line w-44"></span><span class="skeleton-line w-full"></span><span class="skeleton-line w-72"></span></div></div>`
-    }</div>
-
-    ${recognitionHtml}
 
     ${fundingHealthHtml}
 
-    <div class="restoration-status-row">
-      <div class="funding-health-head" style="margin-bottom:2px;">
-        <span class="funding-health-title">Conservation Status</span>
-        <span class="restoration-status-pill ${statusClass}">${escapeHtml(statusText)}</span>
+    <section class="apple-section-card" aria-label="Architecture and Recognition">
+      <div class="apple-section-head">
+        <span class="apple-section-title">Architecture &amp; Recognition</span>
       </div>
-      <div class="budget-split-sub">${escapeHtml(statusNote)}</div>
-    </div>
+      <div class="apple-spec-list">
+        <div class="apple-spec-row">
+          <span class="apple-spec-key">Recognition</span>
+          <span class="apple-spec-val">${escapeHtml(recognitionVal)}</span>
+        </div>
+        <div class="apple-spec-row ${initBuilderVal ? "" : "hidden"}" id="spec-patron-row">
+          <span class="apple-spec-key">Architect / Patron</span>
+          <span class="apple-spec-val" id="spec-patron-val">${escapeHtml(initBuilderVal)}</span>
+        </div>
+        <div class="apple-spec-row ${initStyle ? "" : "hidden"}" id="spec-style-row">
+          <span class="apple-spec-key">Style</span>
+          <span class="apple-spec-val" id="spec-style-val">${escapeHtml(initStyle)}</span>
+        </div>
+        <div class="apple-spec-row ${initMaterial ? "" : "hidden"}" id="spec-material-row">
+          <span class="apple-spec-key">Material</span>
+          <span class="apple-spec-val" id="spec-material-val">${escapeHtml(initMaterial)}</span>
+        </div>
+        <div class="apple-spec-row ${showPeriod ? "" : "hidden"}" id="spec-period-row">
+          <span class="apple-spec-key">Period</span>
+          <span class="apple-spec-val" id="spec-period-val">${escapeHtml(initPeriod)}</span>
+        </div>
+        ${
+          ticketVal
+            ? `<div class="apple-spec-row">
+                <span class="apple-spec-key">Entry Tariff</span>
+                <span class="apple-spec-val">${escapeHtml(ticketVal)}</span>
+              </div>`
+            : ""
+        }
+      </div>
+      ${unescoNote ? `<div class="apple-unesco-note">${escapeHtml(unescoNote)}</div>` : ""}
+    </section>
 
-    <div class="meta-block">
-      ${metaRows
-        .map(
-          ([k, v]) =>
-            `<div class="meta-row"><span class="meta-label">${escapeHtml(k)}</span><span class="meta-val" ${
-              k === "Built / Historical Date"
-                ? 'id="meta-built-val"'
-                : k === "Monument Age"
-                  ? 'id="meta-age-val"'
-                  : ""
-            }>${escapeHtml(v)}</span></div>`
-        )
-        .join("")}
-    </div>
-    ${citeHtml(`${props.heritageDesignation || "National Architectural Register"}${props.qid ? ` · Wikidata ${props.qid}` : ""}.`, props.qid && /^Q\d+$/i.test(props.qid) ? `https://www.wikidata.org/wiki/${props.qid}` : "")}
-
-    ${
-      gaps.length
-        ? `<div class="coverage-gaps-card" id="coverage-gaps-card">
-            <div class="coverage-gaps-title">Why coverage is marked incomplete (${gaps.length} gap${gaps.length > 1 ? "s" : ""})</div>
-            <div class="coverage-checklist">
-              ${gaps
-                .map(
-                  (g) => `
-                <div class="coverage-check-item" data-gap="${escapeHtml(g.key)}">
-                  <span class="coverage-check-icon" aria-hidden="true">!</span>
-                  <span>${escapeHtml(g.label)}</span>
-                </div>`
-                )
-                .join("")}
-            </div>
-            ${citeHtml("Audited live against Wikimedia Commons media, linked Wikipedia pages, and Wikidata/UNESCO architectural fields.")}
-          </div>`
-        : ""
-    }
-
-    ${extLinks.length ? `<div class="detail-links" id="detail-links">${extLinks.join("")}</div>` : ""}
+    <div class="detail-links" id="detail-links">${extLinks.join("")}</div>
 
     <details class="report-box" ${reports.length ? "open" : ""}>
       <summary>
-        <span>Flag maintenance or conservation issue${reports.length ? ` (${reports.length})` : ""}</span>
+        <span>Report conservation or data issue${reports.length ? ` (${reports.length})` : ""}</span>
         <span class="report-chevron" aria-hidden="true">▾</span>
       </summary>
       <form id="report-form">
@@ -1683,9 +1855,9 @@ function openMonumentDrawer(rawProps, coords, shouldFly = false) {
             )
             .join("")}
         </div>
-        <textarea id="report-note" rows="2" placeholder="Describe the issue or verify conservation work (saved locally)…"></textarea>
+        <textarea id="report-note" rows="2" placeholder="Add verification note (saved locally)…"></textarea>
         <div class="report-actions">
-          <button type="submit" class="btn-primary">Submit Flag</button>
+          <button type="submit" class="btn-primary">Save Flag</button>
           <button type="button" class="btn-secondary" id="export-reports-btn">Export JSON</button>
         </div>
       </form>
@@ -1717,21 +1889,38 @@ function openMonumentDrawer(rawProps, coords, shouldFly = false) {
         );
       }
     }
+
     const updatedDate = extractConstructionInfo(props, wdFacts?.rawYear ?? null);
-    const builtEl = document.getElementById("meta-built-val");
-    const ageEl = document.getElementById("meta-age-val");
     const kpiAgeVal = document.getElementById("drawer-age-val");
     const kpiAgeSub = document.getElementById("drawer-age-sub");
     if (updatedDate.yearNum !== null) {
-      if (builtEl) builtEl.textContent = updatedDate.builtLabel;
-      if (ageEl) ageEl.textContent = updatedDate.ageLabel;
       if (kpiAgeVal) kpiAgeVal.textContent = updatedDate.builtLabel;
       if (kpiAgeSub) kpiAgeSub.textContent = updatedDate.ageLabel;
     }
 
-    const sig = buildHistoricalSignificance(props, updatedDate, wikiResult, wdFacts);
-    const sigMount = document.getElementById("history-sig-mount");
-    if (sigMount) sigMount.innerHTML = renderHistoricalSignificanceCard(sig);
+    if (wdFacts) {
+      const builder = dedupeSubtitleParts([
+        wdFacts.architect || props.architect,
+        wdFacts.patron || props.patron || wdFacts.foundedBy || wdFacts.creator,
+      ]).join(" · ");
+      const setSpecRow = (rowId, valId, val) => {
+        if (!val) return;
+        const r = document.getElementById(rowId);
+        const v = document.getElementById(valId);
+        if (r && v) {
+          v.textContent = val;
+          r.classList.remove("hidden");
+        }
+      };
+      setSpecRow("spec-patron-row", "spec-patron-val", builder);
+      const sty = wdFacts.style || props.style || "";
+      setSpecRow("spec-style-row", "spec-style-val", sty);
+      setSpecRow("spec-material-row", "spec-material-val", wdFacts.material || props.material || "");
+      const per = wdFacts.timePeriod || props.period || "";
+      if (per && per.toLowerCase() !== sty.toLowerCase()) {
+        setSpecRow("spec-period-row", "spec-period-val", per);
+      }
+    }
   });
 
   document.querySelectorAll(".issue-chip").forEach((chip) => {
@@ -1792,13 +1981,26 @@ function buildNearbyNav(coords, currentQid) {
 
 function mountDrawerNearbyNav(props, coords) {
   const slot = document.getElementById("drawer-nearby-slot");
-  if (slot) slot.innerHTML = "";
-  const nav = state.nearbyNav;
+  let nav = state.nearbyNav;
   const curIdx = nav && nav.list ? nav.list.findIndex((x) => x.qid === props.qid) : -1;
   if (curIdx >= 0) {
     nav.index = curIdx;
   } else {
-    state.nearbyNav = buildNearbyNav(coords, props.qid);
+    nav = buildNearbyNav(coords, props.qid);
+    state.nearbyNav = nav;
+  }
+  if (!slot) return;
+  if (nav && nav.list && nav.list.length > 1) {
+    slot.innerHTML = `
+      <div class="nearby-stepper" aria-label="Nearby monuments">
+        <button type="button" class="nearby-step-btn" id="nearby-prev-btn" aria-label="Previous nearby monument" title="Previous nearby (←)">‹</button>
+        <span class="nearby-step-label">${nav.index + 1} of ${nav.list.length} nearby</span>
+        <button type="button" class="nearby-step-btn" id="nearby-next-btn" aria-label="Next nearby monument" title="Next nearby (→)">›</button>
+      </div>`;
+    document.getElementById("nearby-prev-btn")?.addEventListener("click", () => navigateNearby(-1));
+    document.getElementById("nearby-next-btn")?.addEventListener("click", () => navigateNearby(1));
+  } else {
+    slot.innerHTML = "";
   }
 }
 
@@ -2668,17 +2870,24 @@ async function queryRemoteWikidataSearch(query) {
       `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${ids.join("|")}&props=labels|descriptions|claims|sitelinks&languages=en&format=json&origin=*`
     );
     const entData = await entRes.json();
+    const remoteBuiltRe = /\b(palace|castle|fort|fortress|citadel|temple|mosque|church|cathedral|abbey|monastery|chapel|shrine|synagogue|stupa|pagoda|mausoleum|tomb|pyramid|amphitheatre|theater|theatre|bridge|aqueduct|viaduct|tower|lighthouse|arch|gate|monument|memorial|statue|ruins|archaeological|villa|mansion|hall|museum|library)\b/i;
+    const remoteNaturalRe = /\b(national park|biosphere|nature reserve|wildlife|wilderness|archipelago|islands?|volcano|mountain|glacier|river|lake|waterfall|canyon|gorge|reef|forest|valley|atoll|fjord|wetland|botanic)\b/i;
     const remoteHits = [];
     for (const qid of ids) {
       const ent = entData.entities?.[qid];
       const coord = ent?.claims?.P625?.[0]?.mainsnak?.datavalue?.value;
       if (!coord || coord.latitude === undefined || coord.longitude === undefined) continue;
+      const nm = ent.labels?.en?.value || qid;
+      const desc = ent.descriptions?.en?.value || "";
+      const hay = `${nm} ${desc}`;
+      if (remoteNaturalRe.test(hay) && !remoteBuiltRe.test(hay)) continue;
+      if (!remoteBuiltRe.test(hay) && !ent.claims?.P1435 && !ent.claims?.P149 && !ent.claims?.P84) continue;
       remoteHits.push({
         qid,
-        name: ent.labels?.en?.value || qid,
+        name: nm,
         coords: [coord.longitude, coord.latitude],
         country: "",
-        siteType: ent.descriptions?.en?.value || "Heritage Site",
+        siteType: desc || "Built Monument",
         wikipedia: ent.sitelinks?.enwiki?.title ? `https://en.wikipedia.org/wiki/${encodeURIComponent(ent.sitelinks.enwiki.title)}` : "",
         cat: "national",
       });
@@ -2715,7 +2924,7 @@ async function queryRemoteWikidataSearch(query) {
 
 // ---------- Initialization & Controls ----------
 async function init() {
-  const [summary, countriesGeo, unescoWorld, searchTop, contestedGeo, indiaExtras, riversGeo] = await preloadDataPromise;
+  const [summary, countriesGeo, unescoWorld, searchTop, contestedGeo, indiaExtras, riversGeo, globalFunding] = await preloadDataPromise;
   state.worldSummary = summary;
   state.countriesGeo = countriesGeo;
   state.unescoWorld = unescoWorld || {};
@@ -2723,6 +2932,16 @@ async function init() {
   state.contestedGeo = contestedGeo;
   state.indiaExtras = indiaExtras;
   state.riversGeo = riversGeo;
+  state.globalFunding = globalFunding || { countries: {}, sites: {}, unescoGrants: {} };
+
+  const nameMap = {};
+  for (const c of summary?.countries || []) {
+    nameMap[c.name.toLowerCase()] = c.iso3;
+  }
+  for (const [iso3, cf] of Object.entries(state.globalFunding.countries || {})) {
+    if (cf.country) nameMap[cf.country.toLowerCase()] = iso3;
+  }
+  state.countryNameToIso = nameMap;
 
   elCountry.innerHTML =
     `<option value="">All Countries &amp; Territories (${summary.countriesCount})</option>` +

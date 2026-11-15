@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Karla:ital,wght@0,400..800;1,400..700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="vendor/maplibre-gl.css?v=5.24.1" />
-  <link rel="stylesheet" href="styles.css?v=20261114l" />
+  <link rel="stylesheet" href="styles.css?v=20261114n" />
 </head>
 <body>
   <div id="map"></div>
@@ -96,7 +96,7 @@
         </div>
 
         <div class="secondary-actions">
-          <button type="button" class="text-btn" id="toggle-budgets-btn" title="Global heritage coverage &amp; conservation overview">Global Coverage</button>
+          <button type="button" class="text-btn" id="toggle-budgets-btn" title="Public heritage funding per monument across 193 countries">Funding by Country</button>
           <button type="button" class="text-btn" id="toggle-sources-btn" title="Data provenance &amp; attribution">Data Sources</button>
         </div>
 
@@ -107,16 +107,16 @@
             <button class="mini-close" id="close-sources-btn" aria-label="Close sources panel">✕</button>
           </div>
           <div class="sources-list">
-            <div><b>Vector Tiles (PMTiles):</b> Global human-built monuments &amp; national registry items queried from Wikidata (P1435, P5816, P149, P84, P88) via QLever, excluding natural parks &amp; terrain features.</div>
-            <div><b>World Heritage:</b> Official UNESCO DataHub (`whc001`) Cultural &amp; Mixed built catalog including inscription criteria &amp; In Danger alerts.</div>
-            <div><b>Contested &amp; National Layers:</b> Natural Earth disputed/contested territories, India ASI monuments, ASI Circle FY 2023–24 budgets &amp; PRASHAD overlays.</div>
+            <div><b>Built Monuments (PMTiles):</b> 106,102 human-built monuments &amp; architectural structures from Wikidata (P1435, P5816, P149, P84, P88) &amp; UNESCO (`whc001`), excluding natural parks &amp; landforms.</div>
+            <div><b>Global Funding Health (193 Countries):</b> FY 2024–25 Ministries of Culture &amp; national antiquities budgets, UNESCO SDG 11.4.1 (`uis002`) &amp; Culture project grants (`prj001`), Eurostat `GF0802`, IMF `GFSCOFOG`, World Bank Heritage Projects, and 274 audited site/trust financial reports.</div>
+            <div><b>National &amp; Regional Layers:</b> India ASI Circle FY 2023–24 budgets, Adopt a Heritage 2.0, PRASHAD, and Natural Earth contested territories.</div>
           </div>
         </div>
 
         <!-- Collapsible Country / Conservation Coverage Panel -->
         <div class="budget-panel hidden" id="budget-panel">
           <div class="budget-panel-head">
-            <span id="budget-panel-title">Global Heritage Coverage by Country</span>
+            <span id="budget-panel-title">Public Heritage Spend per Monument</span>
             <button class="mini-close" id="close-budgets-btn" aria-label="Close coverage panel">✕</button>
           </div>
           <div class="budget-list" id="budget-list"></div>
@@ -207,6 +207,6 @@
 
   <script src="vendor/maplibre-gl.js?v=5.24.1"></script>
   <script src="vendor/pmtiles.js"></script>
-  <script src="app.js?v=20261114l"></script>
+  <script src="app.js?v=20261114n"></script>
 </body>
 </html>

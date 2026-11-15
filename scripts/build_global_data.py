@@ -30,7 +30,7 @@ COUNTRIES_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 UA = "ArchitectureMonumentAtlas/1.0 (https://github.com/shashwathsantosh/Monument-Map-World)"
-QLEVER_URL = "https://qlever.cs.uni-freiburg.de/api/wikidata"
+QLEVER_URL = "https://qlever.dev/api/wikidata"
 WD_API_URL = "https://www.wikidata.org/w/api.php"
 UNESCO_BASE = "https://data.unesco.org/api/explore/v2.1/catalog/datasets/whc001/records"
 NE_50M_COUNTRIES_URL = (
@@ -148,24 +148,33 @@ NATURAL_HERITAGE_RE = re.compile(
 )
 
 NATURAL_NAME_RE = re.compile(
-    r"\b(national park|nature reserve|wildlife sanctuary|wildlife refuge|biosphere reserve|"
-    r"botanical garden|arboretum|natural monument|geopark|nature park|regional park|state park|"
-    r"forest reserve|national forest|wilderness area|marine reserve|marine park|wetland|"
-    r"ramsar|glacier|volcano|crater|canyon|gorge|waterfall|cascades|lake |loch |lough |fjord|reef|"
-    r"archipelago|peninsula|mountain|mount |mt\.|peak|summit|ridge|cavern|desert|sand dune|"
-    r"marsh|swamp|bog|estuary|lagoon|bay of|beach|sea stack|conservation area|ecological reserve|"
-    r"bird sanctuary|tiger reserve|forest|woods|island reserve)\b",
+    r"\b(national parks?|nature reserves?|natural reserves?|wildlife|biosphere|botanical gardens?|botanic gardens?|"
+    r"arboretums?|natural monuments?|geoparks?|nature parks?|regional parks?|state parks?|provincial parks?|"
+    r"country parks?|marine parks?|marine reserves?|forest reserves?|national forests?|wilderness|wetlands?|"
+    r"ramsar|glaciers?|volcanos?|volcanoes|calderas?|craters?|canyons?|gorges?|waterfalls?|falls\b|cascades|"
+    r"lakes?\b|loch\b|lough\b|fjords?|coral reefs?|barrier reefs?|atolls?|archipelagos?|islands?\b|isles?\b|"
+    r"peninsulas?|mountains?|mount\b|mt\.|peaks?\b|summits?|massifs?|alps\b|cordilleras?|caverns?|karst|"
+    r"deserts?|sand dunes?|dunes|marsh(?:es)?|swamps?|bogs?|estuar(?:y|ies)|lagoons?|bays?\b|gulfs?\b|"
+    r"straits?\b|beach(?:es)?|coasts?\b|seashores?|cliffs?\b|rivers?\b|valleys?\b|deltas?\b|basins?\b|"
+    r"steppes?|savannas?|rainforests?|forests?\b|woods?\b|ecological|bird sanctuar(?:y|ies)|tiger reserves?|"
+    r"safaris?|fauna|flora|fossils?|paleontolog|meteorites?|geological)\b",
     re.I,
 )
 
 BUILT_CUE_RE = re.compile(
-    r"\b(temple|shrine|pagoda|stupa|wat|mandir|church|cathedral|basilica|chapel|abbey|monastery|"
-    r"mosque|masjid|minaret|madrasa|synagogue|castle|fort|fortress|citadel|palace|palazzo|chateau|château|"
-    r"schloss|villa|mansion|haveli|mahal|tomb|mausoleum|pyramid|necropoli|acropolis|amphitheat|"
-    r"colosseum|aqueduct|bridge|viaduct|tower|lighthouse|gate|arch|wall|rampart|bastion|museum|"
-    r"theater|theatre|opera|university|library|town hall|city hall|capitol|courthouse|house|pavilion|"
-    r"monument|memorial|statue|obelisk|ruins|archaeological|rock-cut|cave temple|caves|excavat|"
-    r"ancient city|historic centre|historic center|old town|historic district|sanctuary of|buddha|rock art)\b",
+    r"\b(temples?|shrines?|pagodas?|stupas?|wat\b|mandir|church|churches|cathedrals?|basilicas?|chapels?|"
+    r"abbeys?|monaster(?:y|ies)|monastic|prior(?:y|ies)|convents?|mosques?|masjids?|minarets?|madrasas?|"
+    r"synagogues?|castles?|forts?|fortress(?:es)?|citadels?|palaces?|palazzos?|chateaus?|châteaux?|"
+    r"schloss|villas?|mansions?|havelis?|mahals?|tombs?|mausoleums?|pyramids?|necropolis|necropoleis|"
+    r"acropolis|amphitheat(?:re|er)s?|colosseum|aqueducts?|bridges?|viaducts?|towers?|lighthouses?|"
+    r"gates?\b|arch(?:es)?\b|walls?\b|ramparts?|bastions?|museums?|theat(?:re|er)s?|operas?|universit(?:y|ies)|"
+    r"librar(?:y|ies)|town halls?|city halls?|capitols?|courthouses?|pavilions?|prisons?|penitentiar(?:y|ies)|"
+    r"statues?|obelisks?|ruins?|archaeological|rock-cut|cave temples?|grottos?|grottoes|petroglyphs?|"
+    r"rock art|megaliths?|dolmens?|menhirs?|stone circles?|pile dwellings?|dwellings?|mines?\b|"
+    r"ancient cit(?:y|ies)|sacred cit(?:y|ies)|historic cent(?:re|er)s?|historic cit(?:y|ies)|city of\b|"
+    r"old towns?|historic districts?|ancient villages?|building complex|buildings?\b|town planning|"
+    r"medina of|alcázar|alcazar|kasbahs?|kremlins?|sanctuar(?:y|ies) of|alcatraz|skellig michael|delos|"
+    r"mont-saint-michel|robben island|gorée|elephanta|ellora|ajanta|mogao|cinque terre|portovenere)\b",
     re.I,
 )
 
