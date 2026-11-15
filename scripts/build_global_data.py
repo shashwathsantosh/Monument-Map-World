@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-Build verified global monument, UNESCO World Heritage, country boundary,
-and country-sharded search datasets for Monument Map Atlas (World Edition).
+Build verified global human-built architectural & monument datasets for Architecture Monument Atlas.
 
-Preserves all 4,408 India ASI/PRASHAD/Adopt-a-Heritage records intact from
-../Maproject/public/data/ and expands coverage across every country on Earth
-using UNESCO DataHub (whc001), Natural Earth 50m countries, and QLever/Wikidata.
+Strictly excludes natural formations, national parks, rivers, lakes, wetlands,
+Ramsar sites, geological reserves, and modern transit stops/municipalities.
+Preserves all India ASI/PRASHAD/Adopt-a-Heritage records from ../Maproject/public/data/
+and ensures uniform architectural granularity (year, style, patron, architect, citations)
+across every country on Earth.
 """
 
 import argparse
 import json
-import math
 import os
 import re
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,7 +29,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 COUNTRIES_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-UA = "MonumentMapAtlasWorld/1.0 (https://github.com/shashwathsantosh/Monument-Map-World)"
+UA = "ArchitectureMonumentAtlas/1.0 (https://github.com/shashwathsantosh/Monument-Map-World)"
 QLEVER_URL = "https://qlever.cs.uni-freiburg.de/api/wikidata"
 WD_API_URL = "https://www.wikidata.org/w/api.php"
 UNESCO_BASE = "https://data.unesco.org/api/explore/v2.1/catalog/datasets/whc001/records"
@@ -37,31 +37,147 @@ NE_50M_COUNTRIES_URL = (
     "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/"
     "ne_50m_admin_0_countries.geojson"
 )
+NE_10M_DISPUTED_URL = (
+    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/"
+    "ne_10m_admin_0_disputed_areas.geojson"
+)
+NE_50M_BREAKAWAY_URL = (
+    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/"
+    "ne_50m_admin_0_breakaway_disputed_areas.geojson"
+)
+NE_50M_RIVERS_URL = (
+    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/"
+    "ne_50m_rivers_lake_centerlines.geojson"
+)
 
-COMMONS_IMG_RE = re.compile(r"/Special:FilePath/([^?]+)")
-
-# Normalize constituent / historical Wikidata country QIDs to ISO-3166 alpha-3
-COUNTRY_QID_ISO_OVERRIDES = {
-    "Q21": "GBR",   # England
-    "Q22": "GBR",   # Scotland
-    "Q25": "GBR",   # Wales
-    "Q26": "GBR",   # Northern Ireland
-    "Q756617": "DNK",  # Kingdom of Denmark
-    "Q29999": "NLD",   # Kingdom of the Netherlands
-    "Q15180": "RUS",   # Soviet Union (resolved geographically below if needed)
-    "Q83286": "SRB",   # Yugoslavia
-    "Q33946": "CZE",   # Czechoslovakia
+CONSERVATION_AT_RISK_QIDS = {
+    "Q55555088",   # in danger
+    "Q60539160",   # partially destroyed
+    "Q106379705",  # damaged
+    "Q117769382",  # dilapidated
+    "Q56557159",   # ruinous
+    "Q27132179",   # abandoned
 }
+CONSERVATION_RESTORATION_QIDS = {
+    "Q63187954",   # structure under reconstruction
+    "Q55555088",   # in danger
+}
+CONSERVATION_DEMOLISHED_QIDS = {
+    "Q56556915",   # demolished or destroyed
+}
+
+COUNTRY_QID_ISO_OVERRIDES = {
+    "Q21": "GBR",
+    "Q22": "GBR",
+    "Q25": "GBR",
+    "Q26": "GBR",
+    "Q756617": "DNK",
+    "Q29999": "NLD",
+    "Q83286": "SRB",
+    "Q33946": "CZE",
+}
+
+# Wikidata P31 classes that indicate non-built natural/geographic features or plain settlements/transit
+NATURAL_P31_QIDS = {
+    "Q46169",   # national park
+    "Q179049",  # nature reserve
+    "Q473972",  # protected area
+    "Q22698",   # urban/recreational park (kept only if explicit monument/building P31 also present)
+    "Q158454",  # biosphere reserve
+    "Q23397",   # lake
+    "Q4022",    # river
+    "Q355304",  # watercourse
+    "Q23442",   # island
+    "Q207524",  # archipelago
+    "Q34038",   # waterfall
+    "Q35666",   # glacier
+    "Q8502",    # mountain
+    "Q46831",   # mountain range
+    "Q8072",    # volcano
+    "Q54050",   # hill
+    "Q4421",    # forest
+    "Q1775415", # national forest
+    "Q167346",  # botanical garden
+    "Q150784",  # canyon / gorge
+    "Q39816",   # valley
+    "Q170321",  # wetland
+    "Q40080",   # beach
+    "Q11292",   # coral reef
+    "Q39594",   # bay
+    "Q34763",   # peninsula
+    "Q8514",    # desert
+    "Q107679",  # cliff
+    "Q631305",  # rock formation
+    "Q10884",   # tree
+    "Q35509",   # natural cave (unless rock-cut temple/archaeological P31 is present)
+    "Q1322134", # geopark
+    "Q166735",  # brochs/natural? no, fjord = Q45776
+    "Q45776",   # fjord
+    "Q16521",   # taxon
+    "Q70208",   # municipality of Switzerland
+    "Q685309",  # former municipality of Switzerland
+    "Q486972",  # human settlement
+    "Q532",     # village
+    "Q515",     # city
+    "Q123705",  # neighborhood
+    "Q20202352",# locality of Mexico
+    "Q55488",   # railway station
+    "Q22808403",# underground station
+    "Q22808404",# surface station
+    "Q928830",  # metro station
+}
+
+BUILT_P31_QIDS = {
+    "Q16970", "Q23413", "Q839954", "Q2319498", "Q4989906", "Q751876", "Q44613",
+    "Q16560", "Q41176", "Q32815", "Q120560", "Q811165", "Q1497375", "Q207694",
+    "Q2977", "Q39715", "Q56242215", "Q1785071", "Q24354", "Q1081138", "Q160742",
+    "Q2031836", "Q2087181", "Q5393308", "Q17715832", "Q57831", "Q317557", "Q34627",
+    "Q162875", "Q811979", "Q1088552", "Q537127", "Q109607", "Q15661340", "Q12518",
+    "Q1343246", "Q44539", "Q24699794", "Q82117", "Q174782", "Q35112127", "Q860861",
+    "Q15243209", "Q842402", "Q158438", "Q12280", "Q14752696", "Q108325", "Q3950",
+    "Q1497364", "Q11303", "Q33506", "Q3947", "Q39614", "Q2065736", "Q210272",
+}
+
+NATURAL_HERITAGE_RE = re.compile(
+    r"(ramsar site|important bird area|site of special scientific interest|national natural landmark|"
+    r"iugs geological|international dark sky|natural monument|national park|nature reserve|"
+    r"biosphere reserve|special area of conservation|special protection area|natura 2000|"
+    r"wildlife sanctuary|wildlife refuge|geopark|national forest|wilderness area|marine park|"
+    r"scenic beauty|botanical heritage|bird sanctuary|tiger reserve|national seashore)",
+    re.I,
+)
+
+NATURAL_NAME_RE = re.compile(
+    r"\b(national park|nature reserve|wildlife sanctuary|wildlife refuge|biosphere reserve|"
+    r"botanical garden|arboretum|natural monument|geopark|nature park|regional park|state park|"
+    r"forest reserve|national forest|wilderness area|marine reserve|marine park|wetland|"
+    r"ramsar|glacier|volcano|crater|canyon|gorge|waterfall|cascades|lake |loch |lough |fjord|reef|"
+    r"archipelago|peninsula|mountain|mount |mt\.|peak|summit|ridge|cavern|desert|sand dune|"
+    r"marsh|swamp|bog|estuary|lagoon|bay of|beach|sea stack|conservation area|ecological reserve|"
+    r"bird sanctuary|tiger reserve|forest|woods|island reserve)\b",
+    re.I,
+)
+
+BUILT_CUE_RE = re.compile(
+    r"\b(temple|shrine|pagoda|stupa|wat|mandir|church|cathedral|basilica|chapel|abbey|monastery|"
+    r"mosque|masjid|minaret|madrasa|synagogue|castle|fort|fortress|citadel|palace|palazzo|chateau|château|"
+    r"schloss|villa|mansion|haveli|mahal|tomb|mausoleum|pyramid|necropoli|acropolis|amphitheat|"
+    r"colosseum|aqueduct|bridge|viaduct|tower|lighthouse|gate|arch|wall|rampart|bastion|museum|"
+    r"theater|theatre|opera|university|library|town hall|city hall|capitol|courthouse|house|pavilion|"
+    r"monument|memorial|statue|obelisk|ruins|archaeological|rock-cut|cave temple|caves|excavat|"
+    r"ancient city|historic centre|historic center|old town|historic district|sanctuary of|buddha|rock art)\b",
+    re.I,
+)
 
 GLOBAL_SITE_TYPE_KEYWORDS = [
     ("Castle / Fort", ["castle", "fort", "fortress", "citadel", "château", "chateau", "burg", "alcazar", "kasbah", "qila"]),
     ("Palace / Residence", ["palace", "palazzo", "palais", "villa", "manor", "haveli", "mahal", "schloss", "mansion"]),
-    ("Temple / Sanctuary", ["temple", "shrine", "pagoda", "stupa", "wat", "mandir", "gopura", "sanctuary"]),
+    ("Temple / Sanctuary", ["temple", "shrine", "pagoda", "stupa", "wat", "mandir", "gopura", "sanctuary", "rock-cut"]),
     ("Church / Cathedral", ["church", "cathedral", "abbey", "monastery", "basilica", "chapel", "priory", "convent", "kirke"]),
     ("Mosque / Madrasa", ["mosque", "masjid", "minaret", "madrasa", "jami"]),
     ("Archaeological Site", ["archaeological", "ruins", "roman", "ancient", "megalith", "pyramid", "necropolis", "acropolis", "amphitheatre", "tumulus"]),
     ("Tomb / Mausoleum", ["tomb", "mausoleum", "dargah", "cemetery", "memorial", "cenotaph"]),
-    ("Civic / Bridge / Tower", ["bridge", "tower", "gate", "arch", "lighthouse", "aqueduct", "town hall", "station", "theater", "theatre", "opera", "museum"]),
+    ("Civic / Bridge / Tower", ["bridge", "tower", "gate", "arch", "lighthouse", "aqueduct", "town hall", "city hall", "capitol", "theater", "theatre", "opera", "museum"]),
     ("Historic District", ["old town", "historic centre", "historic center", "quarter", "medina", "plaza", "square"]),
 ]
 
@@ -73,7 +189,7 @@ def http_get_json(url: str, headers: dict | None = None, timeout: int = 45, cach
     if headers:
         req_headers.update(headers)
     req = urllib.request.Request(url, headers=req_headers)
-    for attempt in range(3):
+    for attempt in range(4):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 raw = resp.read().decode("utf-8")
@@ -82,10 +198,12 @@ def http_get_json(url: str, headers: dict | None = None, timeout: int = 45, cach
                     cache_path.write_text(raw, encoding="utf-8")
                 return data
         except Exception as exc:
-            if attempt == 2:
+            if attempt == 3:
                 raise
+            is_429 = "429" in str(exc)
+            wait_s = (4.0 * (attempt + 1)) if is_429 else (1.5 * (attempt + 1))
             print(f"  retry {attempt + 1} for {url[:80]}... ({exc})")
-            time.sleep(1.5 * (attempt + 1))
+            time.sleep(wait_s)
 
 
 def qlever_query(query: str, cache_name: str | None = None, timeout: int = 60) -> list[dict]:
@@ -115,9 +233,7 @@ def parse_wkt_point(wkt: str | None):
 
 
 def qid_from_uri(uri: str | None) -> str:
-    if not uri:
-        return ""
-    return uri.rsplit("/", 1)[-1]
+    return uri.rsplit("/", 1)[-1] if uri else ""
 
 
 def normalize_commons_url(url: str | None) -> str:
@@ -129,21 +245,49 @@ def normalize_commons_url(url: str | None) -> str:
     if "Special:FilePath" in url and "width=" not in url:
         sep = "&" if "?" in url else "?"
         return f"{url}{sep}width=720"
-    if "upload.wikimedia.org" in url:
-        return url
     return url
 
 
-def infer_site_type(name: str, desc: str = "", unesco_cat: str = "") -> str:
+def compact_commons_slug(url: str | None) -> str:
+    if not url:
+        return ""
+    m = re.search(r"Special:FilePath/([^?]+)", url)
+    if m:
+        return m.group(1)
+    return ""
+
+
+def infer_site_type(name: str, desc: str = "") -> str:
     hay = f"{name} {desc}".lower()
     for label, kws in GLOBAL_SITE_TYPE_KEYWORDS:
         if any(kw in hay for kw in kws):
             return label
+    return "Architectural Monument"
+
+
+def is_built_monument(name: str, desc: str = "", heritage_lbl: str = "", p31_set: set | None = None, unesco_cat: str = "") -> bool:
     if unesco_cat == "Natural":
-        return "Natural Heritage"
-    if unesco_cat == "Mixed":
-        return "Mixed Heritage"
-    return "Heritage Monument"
+        return False
+    if unesco_cat == "Mixed" and not BUILT_CUE_RE.search(f"{name} {desc}"):
+        return False
+    if unesco_cat == "Cultural":
+        # Even within UNESCO Cultural, skip purely natural/vineyard/river landscapes lacking built cues only if strictly natural name
+        if NATURAL_NAME_RE.search(name) and not BUILT_CUE_RE.search(f"{name} {desc}"):
+            return False
+        return True
+
+    if heritage_lbl and NATURAL_HERITAGE_RE.search(heritage_lbl) and not BUILT_CUE_RE.search(f"{name} {desc}"):
+        return False
+
+    if p31_set:
+        has_nat_p31 = bool(p31_set & NATURAL_P31_QIDS)
+        has_built_p31 = bool(p31_set & BUILT_P31_QIDS)
+        if has_nat_p31 and not has_built_p31 and not BUILT_CUE_RE.search(f"{name} {desc}"):
+            return False
+
+    if NATURAL_NAME_RE.search(name) and not BUILT_CUE_RE.search(f"{name} {desc}"):
+        return False
+    return True
 
 
 def simplify_ring(ring: list, step_deg: float = 0.04, max_pts: int = 120) -> list:
@@ -189,7 +333,7 @@ def point_in_ring(lon: float, lat: float, ring: list) -> bool:
 
 
 def build_countries():
-    print("1. Fetching Natural Earth 50m countries...")
+    print("1. Loading Natural Earth 50m countries...")
     raw = http_get_json(NE_50M_COUNTRIES_URL, cache_path=CACHE_DIR / "ne_50m_countries.json")
     features = []
     country_meta = {}
@@ -218,7 +362,7 @@ def build_countries():
         bboxes = []
         raw_rings = []
         if gtype == "Polygon" and coords:
-            ext = simplify_ring(coords[0], 0.04, 140)
+            ext = simplify_ring(coords[0], 0.05, 110)
             simp_geom = {"type": "Polygon", "coordinates": [ext]}
             bboxes.append(ring_bbox(ext))
             raw_rings.append(ext)
@@ -227,7 +371,7 @@ def build_countries():
             for poly in coords:
                 if not poly:
                     continue
-                ext = simplify_ring(poly[0], 0.05, 110)
+                ext = simplify_ring(poly[0], 0.06, 95)
                 if len(ext) >= 4:
                     kept.append([ext])
                     bboxes.append(ring_bbox(ext))
@@ -243,8 +387,6 @@ def build_countries():
         cx = round((min(all_x) + max(all_x)) / 2, 4)
         cy = round((min(all_y) + max(all_y)) / 2, 4)
         bbox = [round(min(all_x), 3), round(min(all_y), 3), round(max(all_x), 3), round(max(all_y), 3)]
-
-        # Special clean label center for large wrap/multipolygon nations
         label_lon = props.get("LABEL_X") or cx
         label_lat = props.get("LABEL_Y") or cy
 
@@ -262,20 +404,13 @@ def build_countries():
         features.append({
             "type": "Feature",
             "geometry": simp_geom,
-            "properties": {
-                "iso3": iso3,
-                "iso2": iso2,
-                "name": props.get("NAME") or name,
-                "continent": continent,
-            },
+            "properties": {"iso3": iso3, "iso2": iso2, "name": props.get("NAME") or name, "continent": continent},
         })
         polys_for_pip.append((iso3, bbox, raw_rings))
 
-    # Overlay Survey of India official border polygon for India if present in Maproject
     india_border_src = INDIA_REPO_DATA / "india-border.geojson"
     if india_border_src.exists():
         ib = json.loads(india_border_src.read_text(encoding="utf-8"))
-        # Replace IND feature geometry cleanly if SOI is Polygon/MultiPolygon
         if ib.get("features"):
             ind_geoms = []
             for bf in ib["features"]:
@@ -296,9 +431,10 @@ def build_countries():
                     country_meta["IND"]["bbox"] = [68.1, 6.7, 97.4, 37.1]
                     country_meta["IND"]["center"] = [78.96, 21.5]
 
-    out_geo = {"type": "FeatureCollection", "features": features}
-    (DATA_DIR / "world-countries.geojson").write_text(json.dumps(out_geo, separators=(",", ":")), encoding="utf-8")
-    print(f"  Countries written: {len(country_meta)} ({len(features)} features)")
+    (DATA_DIR / "world-countries.geojson").write_text(
+        json.dumps({"type": "FeatureCollection", "features": features}, separators=(",", ":")), encoding="utf-8"
+    )
+    print(f"  Countries written: {len(country_meta)}")
     return country_meta, polys_for_pip
 
 
@@ -312,7 +448,7 @@ def resolve_country_pip(lon: float, lat: float, polys_for_pip: list) -> str:
 
 
 def fetch_country_qid_map(country_meta: dict):
-    print("2. Fetching Wikidata country QID -> ISO mapping...")
+    print("2. Loading Wikidata country QID mapping...")
     q = """
     PREFIX wdt: <http://www.wikidata.org/prop/direct/>
     PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -331,7 +467,6 @@ def fetch_country_qid_map(country_meta: dict):
         if qid and iso3:
             qid_to_iso3[qid] = iso3
             iso3_to_qids.setdefault(iso3, []).append(qid)
-    # Also match exact names for any country missing P298
     q2 = """
     PREFIX wdt: <http://www.wikidata.org/prop/direct/>
     PREFIX wd: <http://www.wikidata.org/entity/>
@@ -352,67 +487,46 @@ def fetch_country_qid_map(country_meta: dict):
             iso3 = name_to_iso3[lbl]
             qid_to_iso3[qid] = iso3
             iso3_to_qids.setdefault(iso3, []).append(qid)
-    print(f"  Mapped {len(qid_to_iso3)} Wikidata country QIDs covering {len(iso3_to_qids)} ISO3 codes")
     return qid_to_iso3, iso3_to_qids
 
 
-def fetch_all_unesco(country_meta: dict, polys_for_pip: list):
-    print("3. Fetching ALL global UNESCO World Heritage records (whc001)...")
-    cache_file = CACHE_DIR / "unesco_whc001_all.json"
-    if cache_file.exists():
-        all_rows = json.loads(cache_file.read_text(encoding="utf-8"))
-    else:
-        all_rows = []
-        offset = 0
-        limit = 100
-        total = None
-        while total is None or offset < total:
-            url = f"{UNESCO_BASE}?limit={limit}&offset={offset}"
-            page = http_get_json(url, timeout=30)
-            if total is None:
-                total = page.get("total_count", 0)
-            batch = page.get("results", [])
-            if not batch:
-                break
-            all_rows.extend(batch)
-            offset += len(batch)
-            time.sleep(0.15)
-        cache_file.write_text(json.dumps(all_rows), encoding="utf-8")
-
+def fetch_unesco_built(country_meta: dict, polys_for_pip: list):
+    print("3. Filtering UNESCO World Heritage to built/cultural monuments...")
+    all_rows = json.loads((CACHE_DIR / "unesco_whc001_all.json").read_text(encoding="utf-8"))
     iso2_to_iso3 = {m["iso2"].upper(): iso3 for iso3, m in country_meta.items() if m.get("iso2")}
     unesco_records = {}
+    skipped_natural = 0
     for rec in all_rows:
         id_no = str(rec.get("id_no") or "").strip()
         if not id_no:
+            continue
+        name = rec.get("name_en") or ""
+        short_desc = rec.get("short_description_en") or ""
+        cat = rec.get("category") or ""
+        if not is_built_monument(name, short_desc, "UNESCO World Heritage Site", None, cat):
+            skipped_natural += 1
             continue
         coords_obj = rec.get("coordinates") or {}
         lon = coords_obj.get("lon")
         lat = coords_obj.get("lat")
         coords = [round(float(lon), 5), round(float(lat), 5)] if lon is not None and lat is not None else None
         iso_codes_raw = rec.get("iso_code") or rec.get("iso_codes") or ""
-        if isinstance(iso_codes_raw, list):
-            iso2_list = [str(x).strip().upper() for x in iso_codes_raw if x]
-        else:
-            iso2_list = [x.strip().upper() for x in str(iso_codes_raw).split(",") if x.strip()]
+        iso2_list = [str(x).strip().upper() for x in (iso_codes_raw if isinstance(iso_codes_raw, list) else str(iso_codes_raw).split(",")) if x.strip()]
         iso3_list = [iso2_to_iso3[i2] for i2 in iso2_list if i2 in iso2_to_iso3]
         if not iso3_list and coords:
             pip_iso = resolve_country_pip(coords[0], coords[1], polys_for_pip)
             if pip_iso:
                 iso3_list = [pip_iso]
         states_names = rec.get("states_names") or []
-        if isinstance(states_names, list):
-            states_str = ", ".join(str(x) for x in states_names if x)
-        else:
-            states_str = str(states_names)
-
+        states_str = ", ".join(str(x) for x in states_names if x) if isinstance(states_names, list) else str(states_names)
         danger_flag = bool(rec.get("danger") and str(rec.get("danger")).lower() not in ("false", "0", "no", ""))
         unesco_records[id_no] = {
             "id": id_no,
-            "name": rec.get("name_en") or "",
-            "shortDesc": rec.get("short_description_en") or "",
+            "name": name,
+            "shortDesc": short_desc,
             "justification": rec.get("justification_en") or "",
             "year": str(rec.get("date_inscribed") or "")[:4],
-            "category": rec.get("category") or "",
+            "category": cat,
             "criteria": rec.get("criteria_txt") or "",
             "danger": danger_flag,
             "region": rec.get("region_en") or "",
@@ -422,131 +536,313 @@ def fetch_all_unesco(country_meta: dict, polys_for_pip: list):
             "coords": coords,
         }
     (DATA_DIR / "unesco-world.json").write_text(json.dumps(unesco_records, separators=(",", ":")), encoding="utf-8")
-    print(f"  UNESCO records saved: {len(unesco_records)}")
+    print(f"  Built UNESCO retained: {len(unesco_records)} (excluded natural: {skipped_natural})")
     return unesco_records
 
 
-def fetch_global_wikidata_bands(min_sitelinks: int = 3):
-    print(f"4. Querying QLever global heritage items (min_sitelinks={min_sitelinks})...")
-    # Query UNESCO Q9259 specifically + sitelink tiers so queries never overwhelm endpoint
-    bands = [
-        ("wd_unesco", """
-            PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-            PREFIX wd: <http://www.wikidata.org/entity/>
-            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-            PREFIX wikibase: <http://wikiba.se/ontology#>
-            PREFIX schema: <http://schema.org/>
-            SELECT ?item ?label ?coord ?sl ?country ?image ?article ?inception ?unescoId WHERE {
-              ?item wdt:P1435 wd:Q9259 ; wdt:P625 ?coord .
-              OPTIONAL { ?item wikibase:sitelinks ?sl . }
-              OPTIONAL { ?item wdt:P17 ?country . }
-              OPTIONAL { ?item wdt:P18 ?image . }
-              OPTIONAL { ?item wdt:P571 ?inception . }
-              OPTIONAL { ?item wdt:P757 ?unescoId . }
-              OPTIONAL { ?item rdfs:label ?label . FILTER(LANG(?label) = "en") }
-              OPTIONAL { ?article schema:about ?item ; schema:isPartOf <https://en.wikipedia.org/> . }
-            }
-        """),
-        ("sl_25_plus", """
-            PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-            PREFIX wikibase: <http://wikiba.se/ontology#>
-            PREFIX schema: <http://schema.org/>
-            SELECT ?item ?label ?coord ?sl ?country ?image ?article ?inception ?heritageLabel WHERE {
-              ?item wdt:P1435 ?h ; wdt:P625 ?coord ; wikibase:sitelinks ?sl .
-              FILTER(?sl >= 25)
-              OPTIONAL { ?item wdt:P17 ?country . }
-              OPTIONAL { ?item wdt:P18 ?image . }
-              OPTIONAL { ?item wdt:P571 ?inception . }
-              OPTIONAL { ?item rdfs:label ?label . FILTER(LANG(?label) = "en") }
-              OPTIONAL { ?h rdfs:label ?heritageLabel . FILTER(LANG(?heritageLabel) = "en") }
-              OPTIONAL { ?article schema:about ?item ; schema:isPartOf <https://en.wikipedia.org/> . }
-            }
-        """),
-        ("sl_10_24", """
-            PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-            PREFIX wikibase: <http://wikiba.se/ontology#>
-            PREFIX schema: <http://schema.org/>
-            SELECT ?item ?label ?coord ?sl ?country ?image ?article ?inception ?heritageLabel WHERE {
-              ?item wdt:P1435 ?h ; wdt:P625 ?coord ; wikibase:sitelinks ?sl .
-              FILTER(?sl >= 10 && ?sl < 25)
-              OPTIONAL { ?item wdt:P17 ?country . }
-              OPTIONAL { ?item wdt:P18 ?image . }
-              OPTIONAL { ?item wdt:P571 ?inception . }
-              OPTIONAL { ?item rdfs:label ?label . FILTER(LANG(?label) = "en") }
-              OPTIONAL { ?h rdfs:label ?heritageLabel . FILTER(LANG(?heritageLabel) = "en") }
-              OPTIONAL { ?article schema:about ?item ; schema:isPartOf <https://en.wikipedia.org/> . }
-            }
-        """),
-        ("sl_5_9", """
-            PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-            PREFIX wikibase: <http://wikiba.se/ontology#>
-            PREFIX schema: <http://schema.org/>
-            SELECT ?item ?label ?coord ?sl ?country ?image ?article ?inception WHERE {
-              ?item wdt:P1435 ?h ; wdt:P625 ?coord ; wikibase:sitelinks ?sl .
-              FILTER(?sl >= 5 && ?sl < 10)
-              OPTIONAL { ?item wdt:P17 ?country . }
-              OPTIONAL { ?item wdt:P18 ?image . }
-              OPTIONAL { ?item wdt:P571 ?inception . }
-              OPTIONAL { ?item rdfs:label ?label . FILTER(LANG(?label) = "en") }
-              OPTIONAL { ?article schema:about ?item ; schema:isPartOf <https://en.wikipedia.org/> . }
-            }
-        """),
-    ]
-    if min_sitelinks <= 3:
-        bands.append(("sl_3_4", """
-            PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-            PREFIX wikibase: <http://wikiba.se/ontology#>
-            PREFIX schema: <http://schema.org/>
-            SELECT ?item ?label ?coord ?sl ?country ?image ?article WHERE {
-              ?item wdt:P1435 ?h ; wdt:P625 ?coord ; wikibase:sitelinks ?sl .
-              FILTER(?sl >= 3 && ?sl < 5)
-              OPTIONAL { ?item wdt:P17 ?country . }
-              OPTIONAL { ?item wdt:P18 ?image . }
-              OPTIONAL { ?item rdfs:label ?label . FILTER(LANG(?label) = "en") }
-              OPTIONAL { ?article schema:about ?item ; schema:isPartOf <https://en.wikipedia.org/> . }
-            }
-        """))
-    if min_sitelinks <= 1:
-        bands.append(("sl_1_2", """
-            PREFIX wdt: <http://www.wikidata.org/prop/direct/>
-            PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-            PREFIX wikibase: <http://wikiba.se/ontology#>
-            SELECT ?item ?label ?coord ?sl ?country ?image WHERE {
-              ?item wdt:P1435 ?h ; wdt:P625 ?coord ; wikibase:sitelinks ?sl .
-              FILTER(?sl >= 1 && ?sl < 3)
-              OPTIONAL { ?item wdt:P17 ?country . }
-              OPTIONAL { ?item wdt:P18 ?image . }
-              OPTIONAL { ?item rdfs:label ?label . FILTER(LANG(?label) = "en") }
-            }
-            LIMIT 120000
-        """))
-
-    all_bindings = []
-    for name, q in bands:
-        t0 = time.time()
-        rows = qlever_query(q, cache_name=f"band_{name}", timeout=90)
-        print(f"  Band {name}: {len(rows)} rows in {time.time() - t0:.2f}s")
-        all_bindings.extend([(name, r) for r in rows])
-    return all_bindings
+def load_p31_map():
+    fp = CACHE_DIR / "p31_sl3_types.json"
+    if not fp.exists():
+        return {}
+    raw = json.loads(fp.read_text(encoding="utf-8"))
+    out = {}
+    for r in raw.get("results", {}).get("bindings", []):
+        q = qid_from_uri(r.get("item", {}).get("value"))
+        t = qid_from_uri(r.get("type", {}).get("value"))
+        if q and t:
+            out.setdefault(q, set()).add(t)
+    return out
 
 
-def backfill_underrepresented_countries(sites_by_qid: dict, country_meta: dict, iso3_to_qids: dict, min_per_country: int = 12):
+def load_conservation_map():
+    fp = CACHE_DIR / "p5816_conservation.json"
+    if not fp.exists():
+        return {}
+    raw = json.loads(fp.read_text(encoding="utf-8"))
+    out = {}
+    for r in raw.get("results", {}).get("bindings", []):
+        q = qid_from_uri(r.get("item", {}).get("value"))
+        sq = qid_from_uri(r.get("soc", {}).get("value"))
+        sl = (r.get("socLabel", {}).get("value") or "").strip()
+        if q and sq:
+            out.setdefault(q, []).append((sq, sl))
+    return out
+
+
+def classify_era(year_val, unesco_year="", text=""):
+    y = year_val
+    if y is None and text:
+        m = re.search(r"\b(\d{3,4})\s*(BCE|BC)\b", text, re.I)
+        if m:
+            y = -int(m.group(1))
+        else:
+            m2 = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)\s+centur", text, re.I)
+            if m2:
+                c = int(m2.group(1))
+                y = -(c * 100 - 50) if re.search(r"BCE|BC", text, re.I) else ((c - 1) * 100 + 50)
+    if y is None:
+        return "unk"
+    if y < 500:
+        return "anc"
+    if y < 1500:
+        return "med"
+    if y < 1800:
+        return "ear"
+    return "mod"
+
+
+def build_contested_areas():
+    print("1b. Loading Natural Earth contested & disputed territories...")
+    features = []
+    contested_pips = []
+    seen_names = set()
+    for url, cache_name, step in [
+        (NE_10M_DISPUTED_URL, "ne_10m_disputed_areas.json", 0.02),
+        (NE_50M_BREAKAWAY_URL, "ne_50m_breakaway_disputed.json", 0.03),
+    ]:
+        try:
+            raw = http_get_json(url, cache_path=CACHE_DIR / cache_name)
+        except Exception as exc:
+            print(f"  Warning fetching {cache_name}: {exc}")
+            continue
+        for f in raw.get("features", []):
+            props = f.get("properties", {})
+            name = (
+                props.get("NAME")
+                or props.get("BRK_NAME")
+                or props.get("ADMIN")
+                or props.get("SOVEREIGNT")
+                or ""
+            ).strip()
+            if not name:
+                continue
+            note = (props.get("NOTE_BRK") or props.get("NAME_ALT") or props.get("TYPE") or "Disputed / Contested Territory").strip()
+            admin = (props.get("ADMIN") or props.get("BRK_GROUP") or "").strip()
+            key = (name.lower(), admin.lower())
+            if key in seen_names:
+                continue
+            geom = f.get("geometry") or {}
+            gtype = geom.get("type")
+            coords = geom.get("coordinates") or []
+            simp_geom = None
+            bboxes = []
+            rings = []
+            if gtype == "Polygon" and coords:
+                ext = simplify_ring(coords[0], step, 140)
+                if len(ext) >= 4:
+                    simp_geom = {"type": "Polygon", "coordinates": [ext]}
+                    bboxes.append(ring_bbox(ext))
+                    rings.append(ext)
+            elif gtype == "MultiPolygon" and coords:
+                kept = []
+                for poly in coords:
+                    if not poly:
+                        continue
+                    ext = simplify_ring(poly[0], step, 110)
+                    if len(ext) >= 4:
+                        kept.append([ext])
+                        bboxes.append(ring_bbox(ext))
+                        rings.append(ext)
+                if kept:
+                    simp_geom = {"type": "MultiPolygon", "coordinates": kept}
+            if not simp_geom or not bboxes:
+                continue
+            seen_names.add(key)
+            all_x = [b[0] for b in bboxes] + [b[2] for b in bboxes]
+            all_y = [b[1] for b in bboxes] + [b[3] for b in bboxes]
+            bbox = [round(min(all_x), 3), round(min(all_y), 3), round(max(all_x), 3), round(max(all_y), 3)]
+            cx = round((min(all_x) + max(all_x)) / 2, 4)
+            cy = round((min(all_y) + max(all_y)) / 2, 4)
+            features.append({
+                "type": "Feature",
+                "geometry": simp_geom,
+                "properties": {
+                    "name": name,
+                    "admin": admin,
+                    "note": note,
+                    "bbox": bbox,
+                    "center": [cx, cy],
+                },
+            })
+            contested_pips.append((name, note, bboxes, rings))
+
+    (DATA_DIR / "contested-areas.geojson").write_text(
+        json.dumps({"type": "FeatureCollection", "features": features}, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    print(f"  Built contested-areas.geojson: {len(features)} territories")
+    return contested_pips
+
+
+def resolve_contested_pip(lon: float, lat: float, contested_pips: list) -> str:
+    for name, _note, bboxes, rings in contested_pips:
+        for idx, b in enumerate(bboxes):
+            if b[0] <= lon <= b[2] and b[1] <= lat <= b[3]:
+                if point_in_ring(lon, lat, rings[idx]):
+                    return name
+    return ""
+
+
+def _decimate_line(pts: list, step: float = 0.04, max_pts: int = 80) -> list:
+    if len(pts) <= 2:
+        return [[round(p[0], 3), round(p[1], 3)] for p in pts]
+    out = [pts[0]]
+    for pt in pts[1:-1]:
+        lx, ly = out[-1]
+        if abs(pt[0] - lx) >= step or abs(pt[1] - ly) >= step:
+            out.append(pt)
+    out.append(pts[-1])
+    if len(out) > max_pts:
+        stride = max(1, len(out) // max_pts)
+        out = out[::stride]
+        if out[-1] != pts[-1]:
+            out.append(pts[-1])
+    return [[round(p[0], 3), round(p[1], 3)] for p in out]
+
+
+def build_world_rivers():
+    print("1c. Loading Natural Earth global major & regional rivers...")
+    raw = http_get_json(NE_50M_RIVERS_URL, cache_path=CACHE_DIR / "ne_50m_rivers.json")
+    features = []
+    for f in raw.get("features", []):
+        props = f.get("properties", {})
+        if (props.get("featurecla") or "").lower().startswith("lake"):
+            continue
+        name = (props.get("name_en") or props.get("name") or "").strip()
+        scalerank = props.get("scalerank")
+        try:
+            sr = int(scalerank) if scalerank is not None else 6
+        except Exception:
+            sr = 6
+        geom = f.get("geometry") or {}
+        gtype = geom.get("type")
+        coords = geom.get("coordinates") or []
+        if gtype == "LineString" and len(coords) >= 2:
+            simp = _decimate_line(coords)
+            if len(simp) >= 2:
+                features.append({
+                    "type": "Feature",
+                    "geometry": {"type": "LineString", "coordinates": simp},
+                    "properties": {"name": name, "scalerank": sr},
+                })
+        elif gtype == "MultiLineString" and coords:
+            parts = []
+            for part in coords:
+                if len(part) >= 2:
+                    simp = _decimate_line(part)
+                    if len(simp) >= 2:
+                        parts.append(simp)
+            if parts:
+                features.append({
+                    "type": "Feature",
+                    "geometry": {"type": "MultiLineString", "coordinates": parts},
+                    "properties": {"name": name, "scalerank": sr},
+                })
+    (DATA_DIR / "world-rivers.geojson").write_text(
+        json.dumps({"type": "FeatureCollection", "features": features}, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    print(f"  Built world-rivers.geojson: {len(features)} rivers")
+    return len(features)
+
+
+def fetch_architectural_details():
+    print("4. Fetching global architectural details (style, architect, patron, period) via QLever...")
+    q = """
+    PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    PREFIX wikibase: <http://wikiba.se/ontology#>
+    SELECT ?item ?styleLabel ?archLabel ?patronLabel WHERE {
+      ?item wdt:P1435 ?h ; wdt:P625 ?coord ; wikibase:sitelinks ?sl .
+      FILTER(?sl >= 3)
+      OPTIONAL { ?item wdt:P149 ?style . ?style rdfs:label ?styleLabel . FILTER(LANG(?styleLabel) = "en") }
+      OPTIONAL { ?item wdt:P84 ?arch . ?arch rdfs:label ?archLabel . FILTER(LANG(?archLabel) = "en") }
+      OPTIONAL { ?item wdt:P88 ?patron . ?patron rdfs:label ?patronLabel . FILTER(LANG(?patronLabel) = "en") }
+      FILTER(BOUND(?styleLabel) || BOUND(?archLabel) || BOUND(?patronLabel))
+    }
+    """
+    rows = qlever_query(q, cache_name="arch_details_sl3", timeout=60)
+    details = {}
+    for r in rows:
+        qid = qid_from_uri(r.get("item", {}).get("value"))
+        if not qid:
+            continue
+        d = details.setdefault(qid, {"style": "", "architect": "", "patron": ""})
+        if not d["style"] and r.get("styleLabel"):
+            d["style"] = r["styleLabel"]["value"]
+        if not d["architect"] and r.get("archLabel"):
+            d["architect"] = r["archLabel"]["value"]
+        if not d["patron"] and r.get("patronLabel"):
+            d["patron"] = r["patronLabel"]["value"]
+    print(f"  Architectural detail records: {len(details)}")
+    return details
+
+
+def fetch_global_granularity_and_visitors():
+    """Fetch verified annual visitors (P1174), material (P186), period (P2348), location (P131), and official heritage title (P1435)."""
+    print("4b. Fetching global verified visitor counts (P1174), material, period, locality, and government designation...")
+    q_vis = """
+    PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+    PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+    SELECT ?item (MAX(xsd:integer(?v)) AS ?maxV) WHERE {
+      ?item wdt:P1435 ?h ; wdt:P1174 ?v .
+    }
+    GROUP BY ?item
+    """
+    visitors = {}
+    for r in qlever_query(q_vis, cache_name="global_visitors_p1174", timeout=30):
+        qid = qid_from_uri(r.get("item", {}).get("value"))
+        try:
+            mv = int(float(r.get("maxV", {}).get("value") or 0))
+        except Exception:
+            mv = 0
+        if qid and mv > 0:
+            visitors[qid] = mv
+
+    q_gran = """
+    PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    PREFIX wikibase: <http://wikiba.se/ontology#>
+    SELECT ?item ?herLabel ?matLabel ?perLabel ?locLabel WHERE {
+      ?item wdt:P1435 ?h ; wdt:P625 ?coord ; wikibase:sitelinks ?sl .
+      FILTER(?sl >= 3)
+      OPTIONAL { ?h rdfs:label ?herLabel . FILTER(LANG(?herLabel) = "en") }
+      OPTIONAL { ?item wdt:P186 ?mat . ?mat rdfs:label ?matLabel . FILTER(LANG(?matLabel) = "en") }
+      OPTIONAL { ?item wdt:P2348 ?per . ?per rdfs:label ?perLabel . FILTER(LANG(?perLabel) = "en") }
+      OPTIONAL { ?item wdt:P131 ?loc . ?loc rdfs:label ?locLabel . FILTER(LANG(?locLabel) = "en") }
+    }
+    """
+    gran = {}
+    for r in qlever_query(q_gran, cache_name="global_granularity_sl3", timeout=90):
+        qid = qid_from_uri(r.get("item", {}).get("value"))
+        if not qid:
+            continue
+        g = gran.setdefault(qid, {"heritage": "", "material": "", "period": "", "location": ""})
+        if not g["heritage"] and r.get("herLabel"):
+            g["heritage"] = r["herLabel"]["value"]
+        if not g["material"] and r.get("matLabel"):
+            g["material"] = r["matLabel"]["value"]
+        if not g["period"] and r.get("perLabel"):
+            g["period"] = r["perLabel"]["value"]
+        if not g["location"] and r.get("locLabel"):
+            g["location"] = r["locLabel"]["value"]
+    print(f"  Global P1174 visitor records: {len(visitors)} | Extra granularity records: {len(gran)}")
+    return visitors, gran
+
+
+def expand_underrepresented_countries_granularity(sites_by_qid: dict, country_meta: dict, iso3_to_qids: dict, p31_map: dict, visitors_map: dict):
+    """Ensure countries with <350 sites in sl>=3 pull strictly government-recognized (wdt:P1435) built monuments at sl>=0."""
     counts = {}
     for s in sites_by_qid.values():
-        c = s.get("countryIso", "")
-        if c:
-            counts[c] = counts.get(c, 0) + 1
-    missing = [iso3 for iso3 in sorted(country_meta.keys()) if counts.get(iso3, 0) < min_per_country]
-    print(f"5. Backfilling {len(missing)} countries with < {min_per_country} monuments...")
-    added = 0
-    for iso3 in missing:
+        counts[s["countryIso"]] = counts.get(s["countryIso"], 0) + 1
+
+    targets = [iso3 for iso3 in sorted(country_meta.keys()) if iso3 != "IND" and counts.get(iso3, 0) < 350]
+    print(f"5. Expanding strictly government-recognized (P1435) granularity across {len(targets)} countries (<350 sites)...")
+
+    def _fetch_country(iso3: str):
         qids = iso3_to_qids.get(iso3, [])
         if not qids:
-            continue
+            return iso3, []
         cqid = qids[0]
         q = f"""
         PREFIX wdt: <http://www.wikidata.org/prop/direct/>
@@ -554,15 +850,9 @@ def backfill_underrepresented_countries(sites_by_qid: dict, country_meta: dict, 
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         PREFIX wikibase: <http://wikiba.se/ontology#>
         PREFIX schema: <http://schema.org/>
-        SELECT ?item ?label ?coord ?sl ?image ?article ?inception WHERE {{
-          ?item wdt:P17 wd:{cqid} ; wdt:P625 ?coord .
-          {{ ?item wdt:P1435 ?h . }}
-          UNION {{ ?item wdt:P31 wd:Q4989906 . }}
-          UNION {{ ?item wdt:P31 wd:Q839954 . }}
-          UNION {{ ?item wdt:P31 wd:Q570116 . }}
-          UNION {{ ?item wdt:P31 wd:Q23413 . }}
-          UNION {{ ?item wdt:P31 wd:Q44539 . }}
-          UNION {{ ?item wdt:P31 wd:Q16560 . }}
+        SELECT ?item ?label ?coord ?sl ?image ?article ?inception ?herLabel WHERE {{
+          ?item wdt:P17 wd:{cqid} ; wdt:P1435 ?h ; wdt:P625 ?coord .
+          OPTIONAL {{ ?h rdfs:label ?herLabel . FILTER(LANG(?herLabel) = "en") }}
           OPTIONAL {{ ?item wikibase:sitelinks ?sl . }}
           OPTIONAL {{ ?item wdt:P18 ?image . }}
           OPTIONAL {{ ?item wdt:P571 ?inception . }}
@@ -570,13 +860,22 @@ def backfill_underrepresented_countries(sites_by_qid: dict, country_meta: dict, 
           OPTIONAL {{ ?article schema:about ?item ; schema:isPartOf <https://en.wikipedia.org/> . }}
         }}
         ORDER BY DESC(?sl)
-        LIMIT 60
+        LIMIT 350
         """
         try:
-            rows = qlever_query(q, cache_name=f"country_{iso3}", timeout=25)
+            rows = qlever_query(q, cache_name=f"p1435_{iso3}", timeout=15)
+            return iso3, rows
         except Exception as exc:
-            print(f"  Backfill skip {iso3}: {exc}")
-            continue
+            print(f"  Skip {iso3}: {exc}", flush=True)
+            return iso3, []
+
+    added = 0
+    for iso3 in targets:
+        cache_file = CACHE_DIR / f"p1435_{iso3}.json"
+        was_cached = cache_file.exists()
+        _, rows = _fetch_country(iso3)
+        if not was_cached:
+            time.sleep(0.22)
         for r in rows:
             qid = qid_from_uri(r.get("item", {}).get("value"))
             if not qid or qid in sites_by_qid:
@@ -586,6 +885,9 @@ def backfill_underrepresented_countries(sites_by_qid: dict, country_meta: dict, 
                 continue
             label = (r.get("label", {}).get("value") or "").strip()
             if not label:
+                continue
+            her_lbl = (r.get("herLabel", {}).get("value") or "").strip() or "Government-Designated Heritage"
+            if not is_built_monument(label, "", her_lbl, p31_map.get(qid), ""):
                 continue
             sl = int(r.get("sl", {}).get("value") or 0)
             img = normalize_commons_url(r.get("image", {}).get("value"))
@@ -600,9 +902,14 @@ def backfill_underrepresented_countries(sites_by_qid: dict, country_meta: dict, 
                 "countryIso": iso3,
                 "country": country_meta[iso3]["name"],
                 "region": country_meta[iso3].get("subregion") or country_meta[iso3].get("continent") or "",
+                "location": (r.get("locLabel", {}).get("value") or ""),
                 "siteType": infer_site_type(label),
                 "year": yr,
-                "style": "",
+                "style": (r.get("styleLabel", {}).get("value") or ""),
+                "material": (r.get("matLabel", {}).get("value") or ""),
+                "period": (r.get("perLabel", {}).get("value") or ""),
+                "architect": (r.get("archLabel", {}).get("value") or ""),
+                "patron": (r.get("patronLabel", {}).get("value") or ""),
                 "desc": "",
                 "image": img,
                 "wikipedia": wp_title,
@@ -610,142 +917,122 @@ def backfill_underrepresented_countries(sites_by_qid: dict, country_meta: dict, 
                 "unescoId": "",
                 "unescoYear": "",
                 "unescoDanger": False,
-                "heritageDesignation": "National Landmark / Heritage",
+                "heritageDesignation": her_lbl,
                 "sitelinks": sl,
+                "annualVisitors": visitors_map.get(qid),
                 "hasFunding": False,
                 "underfunded": False,
                 "inRestoration": False,
             }
             added += 1
-        time.sleep(0.05)
-    print(f"  Backfill added {added} monuments across smaller countries")
-
-
-def hydrate_missing_labels(sites_by_qid: dict):
-    missing = [q for q, s in sites_by_qid.items() if not s.get("name")]
-    if not missing:
-        return
-    print(f"6. Hydrating {len(missing)} items missing English labels via Wikidata wbgetentities (capped at 5000 top sitelinks)...")
-    missing.sort(key=lambda q: sites_by_qid[q].get("sitelinks", 0), reverse=True)
-    missing = missing[:5000]
-    cache_path = CACHE_DIR / "hydrated_labels.json"
-    cached = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
-    to_fetch = [q for q in missing if q not in cached]
-    for i in range(0, len(to_fetch), 50):
-        chunk = to_fetch[i:i + 50]
-        url = (
-            f"{WD_API_URL}?action=wbgetentities&ids={'|'.join(chunk)}"
-            "&props=labels|descriptions&languages=en|fr|es|de|pt|it|ar|ru|zh|ja&format=json"
-        )
-        try:
-            data = http_get_json(url, timeout=20)
-            for q, ent in data.get("entities", {}).items():
-                labels = ent.get("labels", {})
-                descs = ent.get("descriptions", {})
-                lbl = ""
-                for lang in ("en", "fr", "es", "de", "pt", "it", "ar", "ru", "zh", "ja"):
-                    if lang in labels:
-                        lbl = labels[lang].get("value", "")
-                        break
-                if not lbl and labels:
-                    lbl = next(iter(labels.values())).get("value", "")
-                desc = descs.get("en", {}).get("value", "")
-                cached[q] = {"label": lbl, "desc": desc}
-        except Exception:
-            pass
-        time.sleep(0.08)
-    cache_path.write_text(json.dumps(cached), encoding="utf-8")
-    for q, info in cached.items():
-        if q in sites_by_qid and not sites_by_qid[q].get("name") and info.get("label"):
-            sites_by_qid[q]["name"] = info["label"]
-            if not sites_by_qid[q].get("desc") and info.get("desc"):
-                sites_by_qid[q]["desc"] = info["desc"]
+    print(f"  Granularity pass added {added} strictly government-recognized P1435 sites across underrepresented countries")
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--min-sitelinks", type=int, default=3, help="Wikidata P1435 minimum sitelinks (3=~110k sites, 5=~43k sites, 1=~750k sites)")
-    args = parser.parse_args()
-
     country_meta, polys_for_pip = build_countries()
+    contested_pips = build_contested_areas()
+    build_world_rivers()
     qid_to_iso3, iso3_to_qids = fetch_country_qid_map(country_meta)
-    unesco_records = fetch_all_unesco(country_meta, polys_for_pip)
-    raw_bindings = fetch_global_wikidata_bands(args.min_sitelinks)
+    unesco_records = fetch_unesco_built(country_meta, polys_for_pip)
+    p31_map = load_p31_map()
+    conservation_map = load_conservation_map()
+    arch_details = fetch_architectural_details()
+    visitors_map, extra_gran = fetch_global_granularity_and_visitors()
+
+    hydrated_labels = {}
+    hyd_file = CACHE_DIR / "hydrated_labels.json"
+    if hyd_file.exists():
+        hydrated_labels = json.loads(hyd_file.read_text(encoding="utf-8"))
 
     sites_by_qid = {}
-    for band_name, r in raw_bindings:
-        qid = qid_from_uri(r.get("item", {}).get("value"))
-        if not qid:
-            continue
-        coords = parse_wkt_point(r.get("coord", {}).get("value"))
-        if not coords:
-            continue
-        cqid = qid_from_uri(r.get("country", {}).get("value"))
-        iso3 = qid_to_iso3.get(cqid, "")
-        if not iso3 or iso3 not in country_meta:
-            iso3 = resolve_country_pip(coords[0], coords[1], polys_for_pip)
-        if not iso3 or iso3 not in country_meta:
-            continue
+    excluded_natural = 0
+    for band_name in ["band_wd_unesco", "band_sl_25_plus", "band_sl_10_24", "band_sl_5_9", "band_sl_3_4"]:
+        rows = json.loads((CACHE_DIR / f"{band_name}.json").read_text(encoding="utf-8"))["results"]["bindings"]
+        for r in rows:
+            qid = qid_from_uri(r.get("item", {}).get("value"))
+            if not qid:
+                continue
+            coords = parse_wkt_point(r.get("coord", {}).get("value"))
+            if not coords:
+                continue
+            cqid = qid_from_uri(r.get("country", {}).get("value"))
+            iso3 = qid_to_iso3.get(cqid, "")
+            if not iso3 or iso3 not in country_meta:
+                iso3 = resolve_country_pip(coords[0], coords[1], polys_for_pip)
+            if not iso3 or iso3 not in country_meta:
+                continue
 
-        sl = int(r.get("sl", {}).get("value") or 0)
-        label = (r.get("label", {}).get("value") or "").strip()
-        img = normalize_commons_url(r.get("image", {}).get("value"))
-        wp = r.get("article", {}).get("value") or ""
-        wp_title = urllib.parse.unquote(wp.rsplit("/wiki/", 1)[-1]).replace("_", " ") if "/wiki/" in wp else ""
-        inc = (r.get("inception", {}).get("value") or "")[:4]
-        yr = int(inc) if re.match(r"^-?\d{1,4}$", inc) else None
-        unesco_id = str(r.get("unescoId", {}).get("value") or "").strip()
-        heritage_label = (r.get("heritageLabel", {}).get("value") or "").strip()
+            label = (r.get("label", {}).get("value") or "").strip() or hydrated_labels.get(qid, {}).get("label", "")
+            if not label:
+                continue
+            heritage_lbl = (r.get("heritageLabel", {}).get("value") or "").strip()
+            unesco_id = str(r.get("unescoId", {}).get("value") or "").strip()
+            unesco_cat = unesco_records.get(unesco_id, {}).get("category", "") if unesco_id else ""
 
-        existing = sites_by_qid.get(qid)
-        if not existing:
-            sites_by_qid[qid] = {
-                "qid": qid,
-                "name": label,
-                "coords": coords,
-                "countryIso": iso3,
-                "country": country_meta[iso3]["name"],
-                "region": country_meta[iso3].get("subregion") or "",
-                "siteType": infer_site_type(label),
-                "year": yr,
-                "style": "",
-                "desc": "",
-                "image": img,
-                "wikipedia": wp_title,
-                "unesco": "",
-                "unescoId": unesco_id,
-                "unescoYear": "",
-                "unescoDanger": False,
-                "heritageDesignation": heritage_label or ("UNESCO World Heritage Site" if band_name == "wd_unesco" else "National Heritage Designation"),
-                "sitelinks": sl,
-                "hasFunding": False,
-                "underfunded": False,
-                "inRestoration": False,
-            }
-        else:
-            if label and not existing["name"]:
-                existing["name"] = label
-            if img and not existing["image"]:
-                existing["image"] = img
-            if wp_title and not existing["wikipedia"]:
-                existing["wikipedia"] = wp_title
-            if yr and not existing["year"]:
-                existing["year"] = yr
-            if unesco_id and not existing["unescoId"]:
-                existing["unescoId"] = unesco_id
-            if heritage_label and existing["heritageDesignation"] == "National Heritage Designation":
-                existing["heritageDesignation"] = heritage_label
-            if sl > existing["sitelinks"]:
-                existing["sitelinks"] = sl
+            if not is_built_monument(label, hydrated_labels.get(qid, {}).get("desc", ""), heritage_lbl, p31_map.get(qid), unesco_cat):
+                excluded_natural += 1
+                continue
 
-    backfill_underrepresented_countries(sites_by_qid, country_meta, iso3_to_qids, min_per_country=12)
-    hydrate_missing_labels(sites_by_qid)
+            sl = int(r.get("sl", {}).get("value") or 0)
+            img = normalize_commons_url(r.get("image", {}).get("value"))
+            wp = r.get("article", {}).get("value") or ""
+            wp_title = urllib.parse.unquote(wp.rsplit("/wiki/", 1)[-1]).replace("_", " ") if "/wiki/" in wp else ""
+            inc = (r.get("inception", {}).get("value") or "")[:4]
+            yr = int(inc) if re.match(r"^-?\d{1,4}$", inc) else None
+            det = arch_details.get(qid, {})
+            gran = extra_gran.get(qid, {})
+            best_heritage = heritage_lbl or gran.get("heritage", "") or ("UNESCO World Heritage Site" if band_name == "band_wd_unesco" else "Government-Recognized Heritage")
 
-    # Drop any site still lacking a readable name
-    sites_by_qid = {q: s for q, s in sites_by_qid.items() if s.get("name")}
+            existing = sites_by_qid.get(qid)
+            if not existing:
+                sites_by_qid[qid] = {
+                    "qid": qid,
+                    "name": label,
+                    "coords": coords,
+                    "countryIso": iso3,
+                    "country": country_meta[iso3]["name"],
+                    "region": country_meta[iso3].get("subregion") or "",
+                    "location": gran.get("location", ""),
+                    "siteType": infer_site_type(label),
+                    "year": yr,
+                    "style": det.get("style", ""),
+                    "material": gran.get("material", ""),
+                    "period": gran.get("period", ""),
+                    "architect": det.get("architect", ""),
+                    "patron": det.get("patron", ""),
+                    "desc": hydrated_labels.get(qid, {}).get("desc", ""),
+                    "image": img,
+                    "wikipedia": wp_title,
+                    "unesco": "",
+                    "unescoId": unesco_id,
+                    "unescoYear": "",
+                    "unescoDanger": False,
+                    "heritageDesignation": best_heritage,
+                    "sitelinks": sl,
+                    "annualVisitors": visitors_map.get(qid),
+                    "hasFunding": False,
+                    "underfunded": False,
+                    "inRestoration": False,
+                }
+            else:
+                if img and not existing["image"]:
+                    existing["image"] = img
+                if wp_title and not existing["wikipedia"]:
+                    existing["wikipedia"] = wp_title
+                if yr and not existing["year"]:
+                    existing["year"] = yr
+                if unesco_id and not existing["unescoId"]:
+                    existing["unescoId"] = unesco_id
+                if gran.get("heritage") and existing.get("heritageDesignation") in ("", "Government-Recognized Heritage", "National Architectural Heritage"):
+                    existing["heritageDesignation"] = gran["heritage"]
+                if sl > existing["sitelinks"]:
+                    existing["sitelinks"] = sl
 
-    # Link UNESCO World Heritage official data (and ensure ALL 1,273 UNESCO sites appear!)
-    matched_unesco_ids = set()
+    print(f"  Retained built sites from bands: {len(sites_by_qid)} (excluded natural/settlement: {excluded_natural})")
+    expand_underrepresented_countries_granularity(sites_by_qid, country_meta, iso3_to_qids, p31_map, visitors_map)
+
+    # Link built UNESCO records cleanly
+    matched_unesco = set()
     for qid, s in sites_by_qid.items():
         uid = s.get("unescoId")
         if uid and uid in unesco_records:
@@ -760,11 +1047,10 @@ def main():
                 s["inRestoration"] = True
                 s["underfunded"] = True
             s["hasFunding"] = True
-            matched_unesco_ids.add(uid)
+            matched_unesco.add(uid)
 
-    # Also spatially match remaining UNESCO whc001 entries if not linked via P757
     for uid, u in unesco_records.items():
-        if uid in matched_unesco_ids or not u.get("coords"):
+        if uid in matched_unesco or not u.get("coords"):
             continue
         ux, uy = u["coords"]
         best_qid = None
@@ -773,7 +1059,7 @@ def main():
         for qid, s in sites_by_qid.items():
             sx, sy = s["coords"]
             d2 = (sx - ux) ** 2 + (sy - uy) ** 2
-            if d2 < best_d2 and (u["iso3List"] and s["countryIso"] in u["iso3List"] or s["name"].lower() in uname_low or uname_low in s["name"].lower()):
+            if d2 < best_d2 and ((u["iso3List"] and s["countryIso"] in u["iso3List"]) or s["name"].lower() in uname_low or uname_low in s["name"].lower()):
                 best_d2 = d2
                 best_qid = qid
         if best_qid:
@@ -787,7 +1073,7 @@ def main():
                 s["inRestoration"] = True
                 s["underfunded"] = True
             s["hasFunding"] = True
-            matched_unesco_ids.add(uid)
+            matched_unesco.add(uid)
         else:
             iso3 = (u["iso3List"][0] if u["iso3List"] else "") or resolve_country_pip(ux, uy, polys_for_pip)
             if not iso3 or iso3 not in country_meta:
@@ -800,9 +1086,11 @@ def main():
                 "countryIso": iso3,
                 "country": country_meta[iso3]["name"],
                 "region": u["region"] or country_meta[iso3].get("subregion") or "",
-                "siteType": infer_site_type(u["name"], u["shortDesc"], u["category"]),
+                "siteType": infer_site_type(u["name"], u["shortDesc"]),
                 "year": None,
                 "style": "",
+                "architect": "",
+                "patron": "",
                 "desc": (u["shortDesc"] or "")[:240],
                 "image": "",
                 "wikipedia": u["name"],
@@ -811,18 +1099,19 @@ def main():
                 "unescoYear": u["year"],
                 "unescoDanger": bool(u["danger"]),
                 "unescoCategory": u["category"],
-                "heritageDesignation": "UNESCO World Heritage Site",
-                "sitelinks": 30,
+                "heritageDesignation": "UNESCO Cultural Heritage Site",
+                "sitelinks": 35,
+                "annualVisitors": visitors_map.get(syn_qid),
                 "hasFunding": True,
                 "underfunded": bool(u["danger"]),
                 "inRestoration": bool(u["danger"]),
             }
-            matched_unesco_ids.add(uid)
+            matched_unesco.add(uid)
 
-    # Preserve ALL 4,408 India ASI/PRASHAD/Adopt-a-Heritage records verbatim!
+    # Merge ALL built India ASI/PRASHAD/Adopt-a-Heritage records intact
     india_monuments_file = INDIA_REPO_DATA / "monuments.geojson"
     if india_monuments_file.exists():
-        print("7. Merging all 4,408 India detailed sites intact...")
+        print("6. Merging ALL India ASI sites intact (excluding natural parks/sanctuaries)...")
         ind_geo = json.loads(india_monuments_file.read_text(encoding="utf-8"))
         for feat in ind_geo.get("features", []):
             p = feat.get("properties", {})
@@ -830,29 +1119,41 @@ def main():
             qid = p.get("qid")
             if not qid or not coords:
                 continue
+            if not is_built_monument(p.get("name", ""), p.get("desc", ""), "ASI Monument", None, ""):
+                continue
             prev_sl = sites_by_qid.get(qid, {}).get("sitelinks", 0)
             prev_uid = sites_by_qid.get(qid, {}).get("unescoId", "")
+            det = arch_details.get(qid, {})
+            gran = extra_gran.get(qid, {})
             in_rest = bool(
                 p.get("inRestoration")
                 or p.get("prashad")
                 or re.search(r"conservation|restoration|repair|adopt|prashad", (p.get("desc") or "").lower())
             )
+            ind_fl = p.get("footfallLakhs")
+            ind_vis = int(round(float(ind_fl) * 100000)) if ind_fl else None
             sites_by_qid[qid] = {
                 **p,
                 "coords": [round(coords[0], 5), round(coords[1], 5)],
                 "countryIso": "IND",
                 "country": "India",
                 "region": p.get("state") or "",
+                "location": p.get("place") or p.get("location") or gran.get("location", ""),
+                "style": p.get("style") or det.get("style", ""),
+                "material": p.get("material") or gran.get("material", ""),
+                "period": p.get("period") or gran.get("period", ""),
+                "architect": det.get("architect", ""),
+                "patron": det.get("patron", ""),
                 "heritageDesignation": f"ASI {p.get('asiId')}" if p.get("asiId") else "Monument of National Importance (India)",
                 "unescoId": prev_uid,
                 "unescoDanger": False,
                 "sitelinks": max(prev_sl, 8 if p.get("unesco") else (4 if p.get("wikipedia") else 1)),
+                "annualVisitors": ind_vis or visitors_map.get(qid),
                 "hasFunding": bool(p.get("circleExpCr") or p.get("adoptPartner") or p.get("unesco") or p.get("ticketFy")),
                 "underfunded": bool(p.get("underfundedCircle")),
                 "inRestoration": in_rest,
             }
 
-    # Copy India supplemental overlays for India Circle Budgets & PRASHAD layer
     india_extras = {}
     for fname, key in [("asi-circles.json", "asiCircles"), ("prashad-projects.geojson", "prashad")]:
         fp = INDIA_REPO_DATA / fname
@@ -860,60 +1161,115 @@ def main():
             india_extras[key] = json.loads(fp.read_text(encoding="utf-8"))
     (DATA_DIR / "india-extras.json").write_text(json.dumps(india_extras, separators=(",", ":")), encoding="utf-8")
 
-    # Compute priority rank, coverage tier, and most-visited landmarks
+    # Apply conservation signals (Wikidata P5816 + UNESCO Danger + India circles) and drop purely demolished non-UNESCO entries
+    removed_demolished = 0
+    for qid in list(sites_by_qid.keys()):
+        s = sites_by_qid[qid]
+        states = conservation_map.get(qid, [])
+        if states and not s.get("unesco") and s.get("countryIso") != "IND":
+            qids_only = {sq for sq, _ in states}
+            if qids_only <= CONSERVATION_DEMOLISHED_QIDS:
+                del sites_by_qid[qid]
+                removed_demolished += 1
+                continue
+        for sq, slbl in states:
+            if sq in CONSERVATION_AT_RISK_QIDS:
+                s["underfunded"] = True
+                if not s.get("conservationState"):
+                    s["conservationState"] = slbl
+            if sq in CONSERVATION_RESTORATION_QIDS:
+                s["inRestoration"] = True
+                if not s.get("conservationState"):
+                    s["conservationState"] = slbl
+            elif slbl and not s.get("conservationState"):
+                s["conservationState"] = slbl
+    if removed_demolished:
+        print(f"  Removed {removed_demolished} completely demolished non-extant structures via Wikidata P5816")
+
+    # Compute priority scores, chronological eras, contested territory overlap, and PER-COUNTRY zoom rank
     all_sites = list(sites_by_qid.values())
+    era_counts = {"anc": 0, "med": 0, "ear": 0, "mod": 0, "unk": 0}
+    contested_site_count = 0
     for s in all_sites:
         has_photo = bool(s.get("image"))
         has_wiki = bool(s.get("wikipedia") or s.get("desc"))
         has_budget = bool(s.get("hasFunding") or s.get("circleExpCr") or s.get("footfallLakhs"))
-        if not has_photo and not has_wiki:
+        if not has_photo:
             s["coverageStatus"] = "uncovered"
         elif has_photo and (has_wiki or has_budget):
             s["coverageStatus"] = "full"
         else:
             s["coverageStatus"] = "partial"
 
+        era = classify_era(s.get("year"), s.get("unescoYear", ""), f"{s.get('period') or ''} {s.get('desc') or ''}")
+        s["era"] = era
+        era_counts[era] = era_counts.get(era, 0) + 1
+
+        ct_name = resolve_contested_pip(s["coords"][0], s["coords"][1], contested_pips)
+        s["contested"] = bool(ct_name)
+        s["contestedArea"] = ct_name
+        if ct_name:
+            contested_site_count += 1
+
         score = (s.get("sitelinks") or 0) * 3
         if s.get("unesco"):
-            score += 180
+            score += 200
         if s.get("unescoDanger"):
-            score += 40
+            score += 45
         if s.get("footfallLakhs"):
-            score += 120
+            score += 130
+        if (s.get("annualVisitors") or 0) >= 500000:
+            score += 95
         if has_photo:
-            score += 35
+            score += 40
         if has_wiki:
             score += 20
-        if s.get("year"):
+        if s.get("year") or s.get("style") or s.get("architect") or s.get("patron"):
             score += 15
         s["priorityScore"] = score
-        s["isMostVisited"] = bool(
-            (s.get("sitelinks", 0) >= 55)
-            or (s.get("footfallLakhs") and s["footfallLakhs"] >= 5)
-            or (s.get("unesco") and s.get("sitelinks", 0) >= 35)
-        )
+        s["isMostVisited"] = bool((s.get("annualVisitors") or 0) >= 500000)
+
+    by_country = {}
+    for s in all_sites:
+        by_country.setdefault(s["countryIso"], []).append(s)
+
+    for iso3, csites in by_country.items():
+        csites.sort(key=lambda x: (-x["priorityScore"], x["name"]))
+        z4_cap = 5000 if iso3 == "IND" else 1400
+        for c_idx, s in enumerate(csites):
+            # Per-country rank zoom tier so India (~3.8k ASI) & every country show full density crisply on zoom 4!
+            if s.get("unesco") or (c_idx < 3 and s.get("priorityScore", 0) >= 80):
+                s["mz"] = 0
+            elif c_idx < 12 or s.get("isMostVisited"):
+                s["mz"] = 2
+            elif c_idx < (140 if iso3 == "IND" else 80):
+                s["mz"] = 3
+            elif c_idx < z4_cap:
+                s["mz"] = 4
+            else:
+                s["mz"] = 5
 
     all_sites.sort(key=lambda x: (-x["priorityScore"], x["name"]))
     for idx, s in enumerate(all_sites):
         s["rank"] = idx + 1
 
-    # Group into country shards + world summary + top global search index
-    print(f"8. Writing {len(all_sites)} global monuments across country shards and GeoJSON intermediate...")
-    by_country = {}
-    for s in all_sites:
-        by_country.setdefault(s["countryIso"], []).append(s)
+    # Remove stale country JSON shards before writing updated ones
+    for old_f in COUNTRIES_DIR.glob("*.json"):
+        old_f.unlink()
 
-    world_summary = {"totalMonuments": len(all_sites), "totalUnesco": len(unesco_records), "countriesCount": 0, "countries": []}
+    world_summary = {
+        "totalMonuments": len(all_sites),
+        "totalUnesco": len(unesco_records),
+        "countriesCount": 0,
+        "contestedAreasCount": len(contested_pips),
+        "contestedMonuments": contested_site_count,
+        "eraCounts": era_counts,
+        "countries": [],
+    }
     for iso3, meta in sorted(country_meta.items(), key=lambda kv: kv[1]["name"]):
         csites = by_country.get(iso3, [])
         if not csites:
             continue
-        unesco_c = sum(1 for x in csites if x.get("unesco"))
-        danger_c = sum(1 for x in csites if x.get("unescoDanger") or x.get("inRestoration"))
-        photo_c = sum(1 for x in csites if x.get("image"))
-        uncov_c = sum(1 for x in csites if x.get("coverageStatus") == "uncovered")
-        funded_c = sum(1 for x in csites if x.get("hasFunding") and not x.get("underfunded"))
-        underf_c = sum(1 for x in csites if x.get("underfunded"))
         world_summary["countries"].append({
             "iso3": iso3,
             "name": meta["name"],
@@ -921,72 +1277,23 @@ def main():
             "center": meta["center"],
             "bbox": meta["bbox"],
             "total": len(csites),
-            "unesco": unesco_c,
-            "restoration": danger_c,
-            "photographed": photo_c,
-            "uncovered": uncov_c,
-            "funded": funded_c,
-            "underfunded": underf_c,
+            "unesco": sum(1 for x in csites if x.get("unesco")),
+            "restoration": sum(1 for x in csites if x.get("unescoDanger") or x.get("inRestoration")),
+            "photographed": sum(1 for x in csites if x.get("image")),
+            "uncovered": sum(1 for x in csites if x.get("coverageStatus") == "uncovered"),
+            "funded": sum(1 for x in csites if x.get("hasFunding") and not x.get("underfunded")),
+            "underfunded": sum(1 for x in csites if x.get("underfunded")),
+            "contested": sum(1 for x in csites if x.get("contested")),
         })
-        # Write per-country lightweight JSON shard for instant country filter/nearby/search
-        shard = [
-            {
-                "qid": x["qid"],
-                "name": x["name"],
-                "coords": x["coords"],
-                "countryIso": x["countryIso"],
-                "country": x["country"],
-                "region": x.get("region") or "",
-                "siteType": x.get("siteType") or "",
-                "year": x.get("year"),
-                "style": x.get("style") or "",
-                "desc": x.get("desc") or "",
-                "image": x.get("image") or "",
-                "wikipedia": x.get("wikipedia") or "",
-                "unesco": x.get("unesco") or "",
-                "unescoId": x.get("unescoId") or "",
-                "unescoYear": x.get("unescoYear") or "",
-                "unescoDanger": bool(x.get("unescoDanger")),
-                "unescoCategory": x.get("unescoCategory") or "",
-                "heritageDesignation": x.get("heritageDesignation") or "",
-                "asiId": x.get("asiId") or "",
-                "state": x.get("state") or "",
-                "location": x.get("location") or "",
-                "circleName": x.get("circleName") or "",
-                "circleExpCr": x.get("circleExpCr"),
-                "circleMonuments": x.get("circleMonuments"),
-                "circlePerSiteLakh": x.get("circlePerSiteLakh"),
-                "underfundedCircle": bool(x.get("underfundedCircle")),
-                "adoptPartner": x.get("adoptPartner") or "",
-                "adoptProgram": x.get("adoptProgram") or "",
-                "adoptScope": x.get("adoptScope") or "",
-                "footfallLakhs": x.get("footfallLakhs"),
-                "revenueCr": x.get("revenueCr"),
-                "ticketFy": x.get("ticketFy") or "",
-                "ticketNote": x.get("ticketNote") or "",
-                "model3dUrl": x.get("model3dUrl") or "",
-                "model3dLabel": x.get("model3dLabel") or "",
-                "epigraphy": bool(x.get("epigraphy")),
-                "sitelinks": x.get("sitelinks") or 0,
-                "priorityScore": x.get("priorityScore") or 0,
-                "isMostVisited": bool(x.get("isMostVisited")),
-                "coverageStatus": x.get("coverageStatus") or "partial",
-                "hasFunding": bool(x.get("hasFunding")),
-                "underfunded": bool(x.get("underfunded")),
-                "inRestoration": bool(x.get("inRestoration")),
-            }
-            for x in csites
-        ]
-        (COUNTRIES_DIR / f"{iso3}.json").write_text(json.dumps(shard, separators=(",", ":")), encoding="utf-8")
+        (COUNTRIES_DIR / f"{iso3}.json").write_text(json.dumps(csites, separators=(",", ":")), encoding="utf-8")
 
     world_summary["countriesCount"] = len(world_summary["countries"])
     (DATA_DIR / "world-summary.json").write_text(json.dumps(world_summary, separators=(",", ":")), encoding="utf-8")
 
-    # Top global search & featured pins index (top ~6,500 global landmarks + all UNESCO)
     search_top = []
     seen_q = set()
     for s in all_sites:
-        if len(search_top) < 6500 or s.get("unesco") or s.get("isMostVisited"):
+        if len(search_top) < 8000 or s.get("unesco") or s.get("isMostVisited"):
             if s["qid"] in seen_q:
                 continue
             seen_q.add(s["qid"])
@@ -1002,6 +1309,9 @@ def main():
                 "image": s.get("image") or "",
                 "sitelinks": s.get("sitelinks") or 0,
                 "priorityScore": s.get("priorityScore") or 0,
+                "era": s.get("era") or "unk",
+                "yr": s.get("year") if s.get("year") is not None else None,
+                "ct": 1 if s.get("contested") else 0,
                 "cat": (
                     "unesco" if s.get("unesco")
                     else "restoration" if s.get("inRestoration")
@@ -1014,21 +1324,9 @@ def main():
             })
     (DATA_DIR / "search-top.json").write_text(json.dumps(search_top, separators=(",", ":")), encoding="utf-8")
 
-    # Write intermediate GeoJSON for scripts/build_pmtiles.mjs (in scripts/.cache so it isn't shipped in public/)
+    # Compact PMTiles payload (reconstruct full Wikimedia FilePath client-side for snappiness!)
     tile_features = []
     for s in all_sites:
-        # Assign minimum zoom level cleanly so low zooms show crisp landmarks and high zooms reveal all sites
-        if s.get("unesco") or s.get("isMostVisited") or (s.get("sitelinks", 0) >= 40):
-            mz = 0
-        elif s.get("sitelinks", 0) >= 18:
-            mz = 2
-        elif s.get("sitelinks", 0) >= 8:
-            mz = 4
-        elif s.get("sitelinks", 0) >= 4:
-            mz = 5
-        else:
-            mz = 6
-
         cat = (
             "unesco" if s.get("unesco")
             else "restoration" if s.get("inRestoration")
@@ -1038,6 +1336,8 @@ def main():
             else "funded" if s.get("hasFunding")
             else "national"
         )
+        img_slug = compact_commons_slug(s.get("image"))
+        img_raw = "" if img_slug else (s.get("image") or "")
         tile_features.append({
             "type": "Feature",
             "geometry": {"type": "Point", "coordinates": s["coords"]},
@@ -1047,12 +1347,21 @@ def main():
                 "cIso": s["countryIso"],
                 "country": s["country"],
                 "reg": s.get("region") or "",
+                "loc": (s.get("location") or "")[:60],
                 "st": s.get("siteType") or "",
+                "sty": (s.get("style") or "")[:60],
+                "mat": (s.get("material") or "")[:50],
+                "per": (s.get("period") or "")[:50],
+                "hd": (s.get("heritageDesignation") or "")[:70],
+                "vis": int(s.get("annualVisitors") or 0),
+                "era": s.get("era") or "unk",
+                "yr": s.get("year") if s.get("year") is not None else -99999,
+                "ct": 1 if s.get("contested") else 0,
+                "ctName": s.get("contestedArea") or "",
                 "img": 1 if s.get("image") else 0,
-                "imgUrl": s.get("image") or "",
-                "wp": s.get("wikipedia") or "",
+                "imgF": img_slug,
+                "imgU": img_raw,
                 "un": 1 if s.get("unesco") else 0,
-                "unName": s.get("unesco") or "",
                 "unId": s.get("unescoId") or "",
                 "danger": 1 if s.get("unescoDanger") else 0,
                 "rest": 1 if s.get("inRestoration") else 0,
@@ -1061,7 +1370,7 @@ def main():
                 "mv": 1 if s.get("isMostVisited") else 0,
                 "uncov": 1 if s.get("coverageStatus") == "uncovered" else 0,
                 "sl": s.get("sitelinks") or 0,
-                "mz": mz,
+                "mz": s["mz"],
                 "cat": cat,
                 "pr": s.get("priorityScore") or 0,
             },
@@ -1069,9 +1378,8 @@ def main():
 
     pmtiles_src = CACHE_DIR / "monuments_for_pmtiles.geojson"
     pmtiles_src.write_text(json.dumps({"type": "FeatureCollection", "features": tile_features}, separators=(",", ":")), encoding="utf-8")
-    print(f"DONE: {len(all_sites)} sites across {world_summary['countriesCount']} countries.")
-    print(f"  Matched UNESCO entries: {len(matched_unesco_ids)} / {len(unesco_records)}")
-    print(f"  PMTiles source GeoJSON: {pmtiles_src} ({pmtiles_src.stat().st_size / 1e6:.2f} MB)")
+    ind_count = len(by_country.get("IND", []))
+    print(f"DONE: {len(all_sites)} strictly built monuments across {world_summary['countriesCount']} countries (India: {ind_count} sites).")
 
 
 if __name__ == "__main__":

@@ -3,32 +3,42 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Monument Map Atlas — Global Heritage &amp; Conservation Atlas</title>
+  <title>Architecture Monument Atlas — Global Architectural &amp; Conservation Atlas</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Karla:ital,wght@0,400..800;1,400..700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="vendor/maplibre-gl.css" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="vendor/maplibre-gl.css?v=5.24.1" />
+  <link rel="stylesheet" href="styles.css?v=20261114l" />
 </head>
 <body>
   <div id="map"></div>
 
   <button class="sidebar-reopen-btn hidden" id="reopen-sidebar-btn" aria-label="Open map search and controls">
     <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
-    <span>Monument Map Atlas</span>
+    <span>Architecture Monument Atlas</span>
   </button>
+
+  <!-- Global Chronological Timeline Filter -->
+  <nav class="timeline-bar" id="timeline-bar" aria-label="Filter monuments by historical era">
+    <button type="button" class="timeline-pill active" data-era="all" aria-pressed="true" title="Show monuments from all historical eras">All Eras</button>
+    <button type="button" class="timeline-pill" data-era="anc" aria-pressed="false" title="Ancient built structures before 500 CE">Ancient <small>&lt;500</small></button>
+    <button type="button" class="timeline-pill" data-era="med" aria-pressed="false" title="Medieval architecture 500–1499 CE">Medieval <small>500–1499</small></button>
+    <button type="button" class="timeline-pill" data-era="ear" aria-pressed="false" title="Early Modern architecture 1500–1799">Early Modern <small>1500–1799</small></button>
+    <button type="button" class="timeline-pill" data-era="mod" aria-pressed="false" title="Modern architecture 1800–present">Modern <small>1800+</small></button>
+    <button type="button" class="timeline-pill" data-era="unk" aria-pressed="false" title="Monuments without a recorded construction year">Undated</button>
+  </nav>
 
   <!-- Compact Top-Left Corner Control Card -->
   <aside class="left-panel" id="left-panel" aria-label="Map info and filters">
     <div class="left-panel-sticky">
       <div class="brand-row">
         <div class="title-stack">
-          <h1 class="brand-title">Monument Map Atlas</h1>
-          <span class="brand-sub" id="visible-count">Loading global heritage atlas...</span>
+          <h1 class="brand-title">Architecture Monument Atlas</h1>
+          <span class="brand-sub" id="visible-count">Loading global architecture atlas...</span>
         </div>
         <button class="mini-close panel-collapse-btn" id="collapse-sidebar-btn" title="Minimize controls" aria-label="Minimize controls">✕</button>
       </div>
-      <p class="brand-desc">Global map tracking UNESCO sites, national heritage registries, conservation alerts, and funding disclosures.</p>
+      <p class="brand-desc">Global map tracking government-recognized monuments (statutory heritage registries &amp; UNESCO), chronology, conservation, and footfall.</p>
 
       <div class="quick-bar-row">
         <button type="button" class="text-btn" id="toggle-filters-btn" aria-expanded="false" aria-controls="filters-drawer">Filters ▾</button>
@@ -66,10 +76,21 @@
         <div class="filter-toggle-card">
           <div class="filter-toggle-copy">
             <span class="filter-toggle-title">Country Borders Overlay</span>
-            <span class="filter-toggle-sub">Highlight sovereign &amp; territory boundaries</span>
+            <span class="filter-toggle-sub">High-contrast international &amp; disputed boundaries</span>
           </div>
           <label class="switch">
             <input type="checkbox" id="toggle-country-borders" checked aria-label="Show country boundary overlay" />
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+
+        <div class="filter-toggle-card">
+          <div class="filter-toggle-copy">
+            <span class="filter-toggle-title">Contested Territories</span>
+            <span class="filter-toggle-sub">Show all disputed regions &amp; monuments inside them</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-contested" aria-label="Filter contested territories" />
             <span class="switch-slider"></span>
           </label>
         </div>
@@ -86,9 +107,9 @@
             <button class="mini-close" id="close-sources-btn" aria-label="Close sources panel">✕</button>
           </div>
           <div class="sources-list">
-            <div><b>Vector Tiles (PMTiles):</b> Global heritage &amp; national registry items queried from Wikidata (P1435 / Q9259) via QLever, Wikipedia &amp; Wikimedia Commons.</div>
-            <div><b>World Heritage:</b> Official UNESCO DataHub (`whc001`) all-country catalog including inscription criteria &amp; In Danger alerts.</div>
-            <div><b>National Deep Layers:</b> Includes all 4,408 India ASI sites, ASI Circle FY 2023–24 budgets, PRASHAD projects &amp; Natural Earth 50m country polygons.</div>
+            <div><b>Vector Tiles (PMTiles):</b> Global human-built monuments &amp; national registry items queried from Wikidata (P1435, P5816, P149, P84, P88) via QLever, excluding natural parks &amp; terrain features.</div>
+            <div><b>World Heritage:</b> Official UNESCO DataHub (`whc001`) Cultural &amp; Mixed built catalog including inscription criteria &amp; In Danger alerts.</div>
+            <div><b>Contested &amp; National Layers:</b> Natural Earth disputed/contested territories, India ASI monuments, ASI Circle FY 2023–24 budgets &amp; PRASHAD overlays.</div>
           </div>
         </div>
 
@@ -115,20 +136,20 @@
       <button type="button" class="legend-btn" data-legend-filter="restoration" aria-pressed="false" title="Toggle UNESCO In Danger or active restoration sites">
         <i class="dot dot-restoration"></i>In Danger / Restoration
       </button>
-      <button type="button" class="legend-btn" data-legend-filter="mostvisited" aria-pressed="false" title="Toggle iconic high-notability world landmarks">
+      <button type="button" class="legend-btn" data-legend-filter="mostvisited" aria-pressed="false" title="Toggle monuments with 500,000+ verified annual visitors (Wikidata P1174 &amp; India ASI)">
         <i class="dot dot-footfall"></i>Most Visited
       </button>
       <button type="button" class="legend-btn" data-legend-filter="funded" aria-pressed="false" title="Toggle sites with verified funding or UNESCO protection programs">
         <i class="dot dot-adopt"></i>Funded / Protected
       </button>
-      <button type="button" class="legend-btn" data-legend-filter="underfunded" aria-pressed="false" title="Toggle underfunded circles or UNESCO In Danger heritage">
-        <i class="dot dot-underfunded"></i>Underfunded
+      <button type="button" class="legend-btn" data-legend-filter="underfunded" aria-pressed="false" title="Toggle at-risk, ruinous, damaged, or underfunded monuments (Wikidata P5816 + UNESCO Danger + India ASI)">
+        <i class="dot dot-underfunded"></i>Underfunded / At-Risk
       </button>
-      <button type="button" class="legend-btn" data-legend-filter="uncovered" aria-pressed="false" title="Toggle poorly covered sites lacking archive photos and Wikipedia entries">
+      <button type="button" class="legend-btn" data-legend-filter="uncovered" aria-pressed="false" title="Toggle monuments missing verified archive photographs">
         <span class="legend-excl" aria-hidden="true">!</span>Poorly Covered
       </button>
-      <button type="button" class="legend-btn" data-legend-filter="national" aria-pressed="false" title="Toggle national &amp; regional registry monuments">
-        <i class="dot dot-asi"></i>National Site
+      <button type="button" class="legend-btn" data-legend-filter="national" aria-pressed="false" title="Nationally or regionally government-recognized monuments outside UNESCO / special funding tiers">
+        <i class="dot dot-asi"></i>National Registry
       </button>
     </div>
     <button type="button" class="legend-scroll-hint" id="legend-scroll-hint" aria-label="Scroll more categories" title="Scroll categories"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg></button>
@@ -184,8 +205,8 @@
   <!-- Minimal hover preview card with thumbnail -->
   <div class="map-tooltip hidden" id="tooltip"></div>
 
-  <script src="vendor/maplibre-gl.js"></script>
+  <script src="vendor/maplibre-gl.js?v=5.24.1"></script>
   <script src="vendor/pmtiles.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=20261114l"></script>
 </body>
 </html>

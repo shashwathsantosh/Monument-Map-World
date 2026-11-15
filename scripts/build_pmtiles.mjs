@@ -75,6 +75,18 @@ class NodeFileSource {
   }
 }
 
+function lonLatToTileXY(lon, lat, z) {
+  const n = 1 << z;
+  const x = Math.max(0, Math.min(n - 1, Math.floor(((lon + 180) / 360) * n)));
+  const latClamped = Math.max(-85.05112878, Math.min(85.05112878, lat));
+  const rad = (latClamped * Math.PI) / 180;
+  const y = Math.max(
+    0,
+    Math.min(n - 1, Math.floor(((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * n))
+  );
+  return [x, y];
+}
+
 async function main() {
   if (!fs.existsSync(INPUT_GEOJSON)) {
     throw new Error(`Missing input GeoJSON: ${INPUT_GEOJSON}`);
@@ -84,49 +96,42 @@ async function main() {
   const fc = JSON.parse(fs.readFileSync(INPUT_GEOJSON, "utf8"));
   console.log(`Loaded ${fc.features.length} features in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
-  // Zoom-tiered geojson-vt indexes keep z0..z5 lightweight and crisp while z6..z10 retain every point
-  const tiers = [
-    { minZ: 0, maxZ: 1, maxMz: 0 },
-    { minZ: 2, maxZ: 3, maxMz: 2 },
-    { minZ: 4, maxZ: 4, maxMz: 4 },
-    { minZ: 5, maxZ: 5, maxMz: 5 },
-    { minZ: 6, maxZ: MAX_ZOOM, maxMz: 99 },
-  ];
+  // Index ALL monuments at EVERY zoom level z0..MAX_ZOOM so zero dots ever disappear across zoom changes
+  const tileIndex = new geojsonvt(fc, {
+    maxZoom: MAX_ZOOM,
+    indexMaxZoom: MAX_ZOOM,
+    indexMaxPoints: 0,
+    tolerance: 0,
+    extent: 4096,
+    buffer: 64,
+  });
 
   const tiles = [];
-  for (const tier of tiers) {
-    const subset = {
-      type: "FeatureCollection",
-      features: fc.features.filter((f) => (f.properties.mz ?? 6) <= tier.maxMz),
-    };
-    const tileIndex = new geojsonvt(subset, {
-      maxZoom: tier.maxZ,
-      indexMaxZoom: tier.maxZ,
-      indexMaxPoints: 0,
-      tolerance: 2,
-      extent: 4096,
-      buffer: 64,
-    });
-
-    for (let z = tier.minZ; z <= tier.maxZ; z++) {
-      // Enumerate only non-empty tiles covered by geojson-vt tile coords
-      for (const idStr of Object.keys(tileIndex.tiles)) {
-        const t = tileIndex.tiles[idStr];
-        if (!t || t.z !== z || !t.features || !t.features.length) continue;
-        const vtTile = tileIndex.getTile(t.z, t.x, t.y);
-        if (!vtTile || !vtTile.features || !vtTile.features.length) continue;
-        const pbf = vtpbf.fromGeojsonVt({ monuments: vtTile });
-        const gz = zlib.gzipSync(Buffer.from(pbf), { level: 6 });
-        tiles.push({
-          tileId: zxyToTileId(t.z, t.x, t.y),
-          z: t.z,
-          x: t.x,
-          y: t.y,
-          buf: gz,
-        });
-      }
+  for (let z = 0; z <= MAX_ZOOM; z++) {
+    const occupied = new Map();
+    for (const feat of fc.features) {
+      const coords = feat.geometry?.coordinates;
+      if (!coords || coords.length < 2) continue;
+      const [tx, ty] = lonLatToTileXY(coords[0], coords[1], z);
+      const key = `${tx},${ty}`;
+      if (!occupied.has(key)) occupied.set(key, [tx, ty]);
     }
-    console.log(`Tier z${tier.minZ}-z${tier.maxZ} (${subset.features.length} feats): cumulative ${tiles.length} tiles`);
+    let zCount = 0;
+    for (const [tx, ty] of occupied.values()) {
+      const vtTile = tileIndex.getTile(z, tx, ty);
+      if (!vtTile || !vtTile.features || !vtTile.features.length) continue;
+      const pbf = vtpbf.fromGeojsonVt({ monuments: vtTile });
+      const gz = zlib.gzipSync(Buffer.from(pbf), { level: 6 });
+      tiles.push({
+        tileId: zxyToTileId(z, tx, ty),
+        z,
+        x: tx,
+        y: ty,
+        buf: gz,
+      });
+      zCount++;
+    }
+    console.log(`Zoom z${z}: ${zCount} non-empty tiles covering all ${fc.features.length} monuments`);
   }
 
   tiles.sort((a, b) => a.tileId - b.tileId);
@@ -145,9 +150,9 @@ async function main() {
   }
 
   const metadataObj = {
-    name: "Monument Map Atlas (Global)",
-    description: "Global Heritage & Conservation Atlas vector tiles (all countries + UNESCO + India ASI)",
-    version: "1.0.0",
+    name: "Architecture Monument Atlas (Global)",
+    description: "Architecture Monument Atlas — Global Built Architectural & Conservation Atlas vector tiles (all countries + UNESCO + India ASI)",
+    version: "1.1.0",
     minzoom: "0",
     maxzoom: String(MAX_ZOOM),
     vector_layers: [
@@ -161,12 +166,21 @@ async function main() {
           cIso: "String",
           country: "String",
           reg: "String",
+          loc: "String",
           st: "String",
+          sty: "String",
+          mat: "String",
+          per: "String",
+          hd: "String",
+          vis: "Number",
+          era: "String",
+          yr: "Number",
+          ct: "Number",
+          ctName: "String",
           img: "Number",
-          imgUrl: "String",
-          wp: "String",
+          imgF: "String",
+          imgU: "String",
           un: "Number",
-          unName: "String",
           unId: "String",
           danger: "Number",
           rest: "Number",

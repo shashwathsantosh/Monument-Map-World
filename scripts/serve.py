@@ -1,18 +1,32 @@
 #!/usr/bin/env python3
-"""Static HTTP file server with HTTP/1.1 Byte-Range (206 Partial Content) support for PMTiles."""
+"""Dual-stack (IPv4 + IPv6 localhost) static HTTP/1.1 server with HTTP 206 Byte-Range support for PMTiles."""
 
 import argparse
 import os
 import re
+import socket
+import threading
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 
 class RangeRequestHandler(SimpleHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def end_headers(self):
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Range")
+        self.send_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Connection", "close")
         super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def send_head(self):
         path = self.translate_path(self.path)
@@ -76,6 +90,10 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
             rem -= len(chunk)
 
 
+class DualStackV6HTTPServer(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8766)
@@ -83,9 +101,27 @@ def main():
     args = parser.parse_args()
 
     handler = lambda *h_args, **h_kwargs: RangeRequestHandler(*h_args, directory=args.directory, **h_kwargs)
-    srv = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
-    print(f"Serving {args.directory} with HTTP 206 Byte-Range support on http://127.0.0.1:{args.port}")
-    srv.serve_forever()
+    srv4 = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
+
+    servers = [srv4]
+    try:
+        srv6 = DualStackV6HTTPServer(("::1", args.port), handler)
+        servers.append(srv6)
+        t6 = threading.Thread(target=srv6.serve_forever, daemon=True)
+        t6.start()
+        print(
+            f"Serving {args.directory} with HTTP/1.1 206 Byte-Range support on "
+            f"http://localhost:{args.port} (IPv4 127.0.0.1 + IPv6 ::1)",
+            flush=True,
+        )
+    except OSError as exc:
+        print(
+            f"Serving {args.directory} with HTTP/1.1 206 Byte-Range support on "
+            f"http://127.0.0.1:{args.port} (IPv6 ::1 bind skipped: {exc})",
+            flush=True,
+        )
+
+    srv4.serve_forever()
 
 
 if __name__ == "__main__":

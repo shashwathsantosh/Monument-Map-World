@@ -1,18 +1,28 @@
-// Monument Map Atlas (Global Edition) — PMTiles Vector Tiles & Heritage Conservation Explorer
+// Architecture Monument Atlas — PMTiles Vector Tiles, Global Chronology & Conservation Explorer
 
-const PMTILES_URL = "data/monuments.pmtiles";
-const REPORTS_KEY = "monument_map_world_reports_v1";
+const PMTILES_URL = "data/monuments.pmtiles?v=20261114h";
+const REPORTS_KEY = "architecture_monument_atlas_reports_v1";
 
 const SITE_COLORS = {
   unesco: "#ff9500",
   mostvisited: "#007aff",
   funded: "#34c759",
   prashad: "#af52de",
-  restoration: "#f59e0b",
+  restoration: "#af52de",
   underfunded: "#ff3b30",
   uncovered: "#64748b",
+  contested: "#dc2626",
   national: "#5a6572",
   flagged: "#dc2626",
+};
+
+const ERA_LABELS = {
+  all: "All Eras",
+  anc: "Ancient (<500 CE)",
+  med: "Medieval (500–1499)",
+  ear: "Early Modern (1500–1799)",
+  mod: "Modern (1800+)",
+  unk: "Undated",
 };
 
 const CURRENCY_RATES = {
@@ -29,6 +39,8 @@ const state = {
   currency: "USD",
   worldSummary: null,
   countriesGeo: null,
+  contestedGeo: null,
+  riversGeo: null,
   unescoWorld: {},
   searchTop: [],
   indiaExtras: null,
@@ -38,6 +50,8 @@ const state = {
   activeCountry: "",
   activeRegion: "",
   activeFilter: "all",
+  activeEra: "all",
+  contestedOnly: false,
   photosOnly: false,
   showCountryBorders: true,
   searchQuery: "",
@@ -58,11 +72,23 @@ const preloadDataPromise = Promise.all([
   fetch("data/world-countries.geojson").then((r) => r.json()),
   fetch("data/unesco-world.json").then((r) => r.json()),
   fetch("data/search-top.json").then((r) => r.json()),
+  fetch("data/contested-areas.geojson").then((r) => r.json()).catch(() => null),
   fetch("data/india-extras.json").then((r) => r.json()).catch(() => null),
+  fetch("data/world-rivers.geojson").then((r) => r.json()).catch(() => null),
 ]);
 
 const plateStyle = {
   version: 8,
+  projection: { type: "globe" },
+  sky: {
+    "sky-color": "#d6ecfb",
+    "sky-horizon-blend": 0.45,
+    "horizon-color": "#eef6fc",
+    "horizon-fog-blend": 0.4,
+    "fog-color": "#eef6fc",
+    "fog-ground-blend": 0.6,
+    "atmosphere-blend": ["interpolate", ["linear"], ["zoom"], 0, 0.85, 5, 0.45, 7, 0],
+  },
   glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
   sources: {
     openmaptiles: {
@@ -74,7 +100,7 @@ const plateStyle = {
     {
       id: "plate-paper",
       type: "background",
-      paint: { "background-color": "#eeede8" },
+      paint: { "background-color": "#f2f1ec" },
     },
   ],
 };
@@ -166,25 +192,35 @@ function pinThumbUrl(url) {
   return url;
 }
 
+function getGlobePadding() {
+  const lpCollapsed = elLeftPanel && elLeftPanel.classList.contains("collapsed");
+  if (window.innerWidth <= 900) {
+    return { top: 44, bottom: 56, left: 16, right: 16 };
+  }
+  return { top: 46, bottom: 54, left: lpCollapsed ? 24 : 260, right: 24 };
+}
+
 const map = new maplibregl.Map({
   container: "map",
   style: plateStyle,
-  center: [18, 22],
-  zoom: 1.85,
-  minZoom: 1.2,
+  center: [22, 18],
+  zoom: window.innerWidth <= 760 ? 1.65 : 2.35,
+  minZoom: 0.9,
   maxZoom: 19,
-  renderWorldCopies: true,
+  pitch: 0,
+  padding: window.innerWidth <= 900 ? { top: 44, bottom: 56, left: 16, right: 16 } : { top: 46, bottom: 54, left: 260, right: 24 },
+  renderWorldCopies: false,
   attributionControl: false,
 });
 
-map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
-map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
+map.addControl(new maplibregl.NavigationControl({ showCompass: true, visualizePitch: true }), "bottom-right");
 
 const elCountry = document.getElementById("country-select");
 const elRegionGroup = document.getElementById("region-filter-group");
 const elRegion = document.getElementById("region-select");
 const elTogglePhotos = document.getElementById("toggle-photos");
 const elToggleCountryBorders = document.getElementById("toggle-country-borders");
+const elToggleContested = document.getElementById("toggle-contested");
 const elSearch = document.getElementById("search-input");
 const elSearchDock = document.getElementById("search-dock");
 const elSearchToggleBtn = document.getElementById("search-toggle-btn");
@@ -205,10 +241,11 @@ const elFiltersDrawer = document.getElementById("filters-drawer");
 
 function centerWorld(animate = true) {
   map.easeTo({
-    center: [18, 22],
-    zoom: window.innerWidth <= 760 ? 1.3 : 1.85,
+    center: [22, 18],
+    zoom: window.innerWidth <= 760 ? 1.65 : 2.35,
     bearing: 0,
     pitch: 0,
+    padding: getGlobePadding(),
     duration: animate ? 650 : 0,
   });
 }
@@ -248,25 +285,57 @@ async function ensureCountryShard(iso3) {
   return prom;
 }
 
+function reconstructImageUrl(raw) {
+  if (!raw) return "";
+  if (raw.image) return raw.image;
+  if (raw.imgUrl) return raw.imgUrl;
+  if (raw.imgU) return raw.imgU;
+  if (raw.imgF) {
+    let clean = String(raw.imgF);
+    try {
+      clean = decodeURIComponent(clean);
+    } catch {
+      // keep raw slug if malformed escape
+    }
+    return `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(clean)}?width=520`;
+  }
+  return "";
+}
+
 function normalizeTileProps(raw) {
+  const yrRaw = raw.yr !== undefined && raw.yr !== -99999 ? Number(raw.yr) : raw.year ?? null;
+  const img = reconstructImageUrl(raw);
   return {
     qid: raw.qid || "",
-    name: raw.name || "Heritage Monument",
+    name: raw.name || "Architectural Monument",
     countryIso: raw.cIso || raw.countryIso || "",
     country: raw.country || "",
     region: raw.reg || raw.region || "",
     state: raw.state || raw.reg || "",
-    siteType: raw.st || raw.siteType || "Heritage Monument",
-    image: raw.imgUrl || raw.image || "",
+    location: raw.loc || raw.location || raw.place || "",
+    siteType: raw.st || raw.siteType || "Monument",
+    style: raw.sty || raw.style || "",
+    material: raw.mat || raw.material || "",
+    period: raw.per || raw.period || "",
+    heritageDesignation: raw.hd || raw.heritageDesignation || "Government-Recognized Heritage",
+    annualVisitors: raw.vis ? Number(raw.vis) : raw.annualVisitors ?? (raw.footfallLakhs ? Math.round(Number(raw.footfallLakhs) * 100000) : null),
+    architect: raw.architect || "",
+    patron: raw.patron || "",
+    era: raw.era || "unk",
+    year: yrRaw !== null && !Number.isNaN(yrRaw) ? yrRaw : null,
+    contested: Boolean(raw.ct || raw.contested),
+    contestedArea: raw.ctName || raw.contestedArea || "",
+    conservationState: raw.conservationState || "",
+    image: img,
     wikipedia: raw.wp ? (raw.wp.startsWith("http") ? raw.wp : `https://en.wikipedia.org/wiki/${encodeURIComponent(raw.wp.replace(/ /g, "_"))}`) : "",
-    unesco: raw.unName || raw.unesco || "",
+    unesco: raw.unName || raw.unesco || (raw.un ? "UNESCO World Heritage Site" : ""),
     unescoId: raw.unId || raw.unescoId || "",
     unescoDanger: Boolean(raw.danger || raw.unescoDanger),
     inRestoration: Boolean(raw.rest || raw.inRestoration),
     underfunded: Boolean(raw.uf || raw.underfunded),
     hasFunding: Boolean(raw.fund || raw.hasFunding),
     isMostVisited: Boolean(raw.mv || raw.isMostVisited),
-    coverageStatus: raw.uncov ? "uncovered" : raw.coverageStatus || "partial",
+    coverageStatus: raw.uncov ? "uncovered" : raw.coverageStatus || (img ? "partial" : "uncovered"),
     sitelinks: Number(raw.sl ?? raw.sitelinks ?? 0),
     priorityScore: Number(raw.pr ?? raw.priorityScore ?? 0),
     cat: raw.cat || "national",
@@ -301,18 +370,23 @@ function getMergedProps(rawProps) {
   return rich;
 }
 
-// ---------- Floating Photographic Marker Pins ----------
-const photoPinState = { markers: [], timer: null, loadedImgs: new Set(), failedImgs: new Set() };
+// ---------- Floating Photographic Marker Pins (Incremental DOM Reuse + Loaded Class) ----------
+const photoPinState = { activePins: new Map(), timer: null, failedImgs: new Set() };
 
 function clearPhotoMarkers() {
-  for (const m of photoPinState.markers) m.remove();
-  photoPinState.markers = [];
+  for (const rec of photoPinState.activePins.values()) {
+    rec.marker.remove();
+  }
+  photoPinState.activePins.clear();
 }
 
 function matchesCurrentFilter(item) {
   if (state.activeCountry && (item.countryIso || item.cIso) !== state.activeCountry) return false;
   if (state.activeRegion && (item.region || item.reg || item.state || "") !== state.activeRegion) return false;
-  if (state.photosOnly && !(item.image || item.imgUrl || item.img === 1)) return false;
+  if (state.activeEra && state.activeEra !== "all" && (item.era || "unk") !== state.activeEra) return false;
+  const imgUrl = item.image || item.imgUrl || item.imgU || item.imgF;
+  if (state.photosOnly && !(imgUrl || item.img === 1)) return false;
+  if (state.contestedOnly && !(item.ct === 1 || item.contested)) return false;
   const f = state.activeFilter;
   if (f === "all") return true;
   if (f === "unesco") return Boolean(item.unesco || item.unName || item.un === 1);
@@ -321,26 +395,34 @@ function matchesCurrentFilter(item) {
   if (f === "funded") return Boolean((item.hasFunding || item.fund === 1) && !(item.underfunded || item.uf === 1));
   if (f === "underfunded") return Boolean(item.underfunded || item.uf === 1);
   if (f === "uncovered") return (item.coverageStatus === "uncovered" || item.uncov === 1);
-  if (f === "national") return !(item.unesco || item.unName) && !(item.hasFunding || item.fund === 1);
+  if (f === "contested") return Boolean(item.ct === 1 || item.contested);
+  if (f === "national") return (item.cat === "national") || (!(item.unesco || item.unName || item.un === 1) && !(item.hasFunding || item.fund === 1) && !(item.inRestoration || item.rest === 1) && !(item.isMostVisited || item.mv === 1) && !(item.underfunded || item.uf === 1) && !(item.coverageStatus === "uncovered" || item.uncov === 1));
   return true;
 }
 
 function schedulePhotoPins() {
   clearTimeout(photoPinState.timer);
-  photoPinState.timer = setTimeout(syncPhotoPins, 150);
+  photoPinState.timer = setTimeout(syncPhotoPins, 110);
 }
 
 function syncPhotoPins() {
   if (!map || !map.getSource("monuments-vt")) return;
   const zoom = map.getZoom();
-  if (zoom < 2.2) {
+  if (zoom < 2.15) {
     clearPhotoMarkers();
     return;
   }
 
+  const sizeTier =
+    zoom < 4.5
+      ? { w: 40, h: 30, labelW: 92 }
+      : zoom < 6.8
+      ? { w: 48, h: 35, labelW: 108 }
+      : { w: 56, h: 40, labelW: 122 };
+
   const bounds = map.getBounds();
-  const maxPins = zoom < 4.5 ? 7 : zoom < 7 ? 10 : 14;
-  const minPixelDist = zoom < 5 ? 115 : 88;
+  const maxPins = zoom < 4.5 ? 7 : zoom < 7 ? 11 : 15;
+  const minPixelDist = zoom < 5 ? 112 : 84;
   const candidates = [];
 
   // 1) Inspect currently rendered PMTiles monument features with photos
@@ -349,12 +431,11 @@ function syncPhotoPins() {
   for (const feat of rendered) {
     const p = feat.properties || {};
     if (!p.qid || seen.has(p.qid)) continue;
-    const img = p.imgUrl || "";
+    const img = reconstructImageUrl(p);
     if (!img || photoPinState.failedImgs.has(img)) continue;
     seen.add(p.qid);
     const coords = feat.geometry?.coordinates;
-    if (!coords) continue;
-    if (!bounds.contains(coords)) continue;
+    if (!coords || !bounds.contains(coords)) continue;
     if (!matchesCurrentFilter(p)) continue;
     candidates.push({
       qid: p.qid,
@@ -386,16 +467,33 @@ function syncPhotoPins() {
 
   const chosen = [];
   const chosenPts = [];
+  const nextKeys = new Set();
   for (const c of candidates) {
     if (chosen.length >= maxPins) break;
     const px = map.project(c.coords);
     if (chosenPts.some((q) => Math.hypot(q.x - px.x, q.y - px.y) < minPixelDist)) continue;
     chosen.push(c);
     chosenPts.push(px);
+    nextKeys.add(c.qid);
   }
 
-  clearPhotoMarkers();
+  // Remove only pins no longer in the active set for flicker-free pan/zoom
+  for (const [qid, rec] of photoPinState.activePins.entries()) {
+    if (!nextKeys.has(qid)) {
+      rec.marker.remove();
+      photoPinState.activePins.delete(qid);
+    }
+  }
+
   for (const c of chosen) {
+    const existing = photoPinState.activePins.get(c.qid);
+    if (existing) {
+      existing.el.style.setProperty("--pin-w", `${sizeTier.w}px`);
+      existing.el.style.setProperty("--pin-h", `${sizeTier.h}px`);
+      existing.el.style.setProperty("--pin-label-w", `${sizeTier.labelW}px`);
+      continue;
+    }
+
     const p = normalizeTileProps(c.props);
     const el = document.createElement("button");
     el.type = "button";
@@ -403,33 +501,50 @@ function syncPhotoPins() {
       ? SITE_COLORS.unesco
       : p.inRestoration
       ? SITE_COLORS.restoration
+      : p.contested
+      ? SITE_COLORS.contested
       : p.isMostVisited
       ? SITE_COLORS.mostvisited
       : SITE_COLORS.funded;
     el.className = "photo-pin";
     el.style.setProperty("--pin-accent", tint);
+    el.style.setProperty("--pin-w", `${sizeTier.w}px`);
+    el.style.setProperty("--pin-h", `${sizeTier.h}px`);
+    el.style.setProperty("--pin-label-w", `${sizeTier.labelW}px`);
     el.setAttribute("aria-label", `${p.name} — ${p.country || ""}`);
 
     const frame = document.createElement("div");
-    frame.className = "photo-pin-frame";
+    frame.className = `photo-pin-frame${p.unesco ? " is-unesco" : p.isMostVisited ? " is-ticketed" : ""}`;
     const img = document.createElement("img");
     img.loading = "eager";
     img.decoding = "async";
     img.alt = p.name;
-    img.src = pinThumbUrl(c.img);
-    img.addEventListener("load", () => photoPinState.loadedImgs.add(c.img));
+    const thumbSrc = pinThumbUrl(c.img);
+    img.addEventListener("load", () => img.classList.add("loaded"));
     img.addEventListener("error", () => {
       photoPinState.failedImgs.add(c.img);
-      el.remove();
+      const rec = photoPinState.activePins.get(c.qid);
+      if (rec) {
+        rec.marker.remove();
+        photoPinState.activePins.delete(c.qid);
+      }
     });
+    img.src = thumbSrc;
+    if (img.complete && img.naturalWidth > 0) {
+      img.classList.add("loaded");
+    }
     frame.appendChild(img);
 
     const lbl = document.createElement("span");
     lbl.className = "photo-pin-label";
     lbl.textContent = p.name.length > 22 ? `${p.name.slice(0, 20)}…` : p.name;
 
+    const stem = document.createElement("div");
+    stem.className = "photo-pin-stem";
+
     el.appendChild(frame);
     el.appendChild(lbl);
+    el.appendChild(stem);
 
     el.addEventListener("click", (ev) => {
       ev.stopPropagation();
@@ -437,7 +552,7 @@ function syncPhotoPins() {
     });
 
     const marker = new maplibregl.Marker({ element: el, anchor: "bottom" }).setLngLat(c.coords).addTo(map);
-    photoPinState.markers.push(marker);
+    photoPinState.activePins.set(c.qid, { marker, el });
   }
 }
 
@@ -445,7 +560,9 @@ function buildMapFilterExpression() {
   const conds = ["all"];
   if (state.activeCountry) conds.push(["==", ["get", "cIso"], state.activeCountry]);
   if (state.activeRegion) conds.push(["==", ["get", "reg"], state.activeRegion]);
+  if (state.activeEra && state.activeEra !== "all") conds.push(["==", ["get", "era"], state.activeEra]);
   if (state.photosOnly) conds.push(["==", ["get", "img"], 1]);
+  if (state.contestedOnly) conds.push(["==", ["get", "ct"], 1]);
 
   const f = state.activeFilter;
   if (f === "unesco") conds.push(["==", ["get", "un"], 1]);
@@ -454,22 +571,29 @@ function buildMapFilterExpression() {
   else if (f === "funded") conds.push(["all", ["==", ["get", "fund"], 1], ["==", ["get", "uf"], 0]]);
   else if (f === "underfunded") conds.push(["==", ["get", "uf"], 1]);
   else if (f === "uncovered") conds.push(["==", ["get", "uncov"], 1]);
-  else if (f === "national") conds.push(["all", ["==", ["get", "un"], 0], ["==", ["get", "fund"], 0]]);
+  else if (f === "contested") conds.push(["==", ["get", "ct"], 1]);
+  else if (f === "national") conds.push(["==", ["get", "cat"], "national"]);
 
   return conds.length === 1 ? null : conds;
 }
 
 function updateCounterDisplay() {
   if (!state.worldSummary) return;
+  const eraSuffix = state.activeEra && state.activeEra !== "all" ? ` · ${ERA_LABELS[state.activeEra] || state.activeEra}` : "";
   if (state.activeCountry) {
     const cMeta = state.worldSummary.countries.find((c) => c.iso3 === state.activeCountry);
     const shard = state.countryShards[state.activeCountry];
     const items = shard || [];
     const matching = items.length ? items.filter((item) => matchesCurrentFilter(item)).length : cMeta?.total || 0;
     const countryName = cMeta ? cMeta.name : state.activeCountry;
-    elCount.textContent = `${matching.toLocaleString()} sites in ${countryName}`;
+    elCount.textContent = `${matching.toLocaleString()} structures in ${countryName}${eraSuffix}`;
+  } else if (state.contestedOnly || state.activeFilter === "contested") {
+    elCount.textContent = `${(state.worldSummary.contestedMonuments || 0).toLocaleString()} monuments in ${state.worldSummary.contestedAreasCount || 0} contested territories${eraSuffix}`;
+  } else if (state.activeEra && state.activeEra !== "all" && state.worldSummary.eraCounts) {
+    const ec = state.worldSummary.eraCounts[state.activeEra] || 0;
+    elCount.textContent = `${ec.toLocaleString()} ${ERA_LABELS[state.activeEra]} monuments · ${state.worldSummary.countriesCount} countries`;
   } else {
-    elCount.textContent = `${state.worldSummary.totalMonuments.toLocaleString()} sites · ${state.worldSummary.countriesCount} countries`;
+    elCount.textContent = `${state.worldSummary.totalMonuments.toLocaleString()} built monuments · ${state.worldSummary.countriesCount} countries`;
   }
 }
 
@@ -481,12 +605,27 @@ function applyFilters() {
   if (map.getLayer("monuments-uncovered-excl")) {
     const exclFilter = expr ? ["all", ["==", ["get", "uncov"], 1], expr] : ["==", ["get", "uncov"], 1];
     map.setFilter("monuments-uncovered-excl", exclFilter);
+    if (map.setLayerZoomRange) {
+      map.setLayerZoomRange("monuments-uncovered-excl", state.activeFilter === "uncovered" ? 2.2 : 5.2, 22);
+    }
   }
   if (map.getLayer("country-active-line")) {
     map.setFilter(
       "country-active-line",
       state.activeCountry ? ["==", ["get", "iso3"], state.activeCountry] : ["==", ["get", "iso3"], "__NONE__"]
     );
+  }
+  const contestedEmphasis = Boolean(state.contestedOnly || state.activeFilter === "contested");
+  if (map.getLayer("contested-areas-fill")) {
+    map.setPaintProperty("contested-areas-fill", "fill-opacity", contestedEmphasis ? 0.24 : 0.05);
+  }
+  if (map.getLayer("contested-areas-line")) {
+    map.setPaintProperty("contested-areas-line", "line-width", contestedEmphasis ? 1.8 : 0.9);
+    map.setPaintProperty("contested-areas-line", "line-opacity", contestedEmphasis ? 0.92 : 0.55);
+  }
+  if (map.getLayer("om-border-disputed")) {
+    map.setPaintProperty("om-border-disputed", "line-color", contestedEmphasis ? "#dc2626" : "#4a5056");
+    map.setPaintProperty("om-border-disputed", "line-width", contestedEmphasis ? 1.7 : 1.0);
   }
   if (map.getLayer("prashad-points")) {
     const showInd = (!state.activeCountry || state.activeCountry === "IND") && (state.activeFilter === "all" || state.activeFilter === "restoration" || state.activeFilter === "funded");
@@ -559,9 +698,13 @@ function showTooltip(point, html) {
 function setSelectedSite(coords) {
   const src = map.getSource("selected-site");
   if (!src) return;
+  if (!Array.isArray(coords) || coords.length < 2) {
+    src.setData({ type: "FeatureCollection", features: [] });
+    return;
+  }
   src.setData({
     type: "FeatureCollection",
-    features: coords ? [{ type: "Feature", geometry: { type: "Point", coordinates: coords }, properties: {} }] : [],
+    features: [{ type: "Feature", geometry: { type: "Point", coordinates: coords }, properties: {} }],
   });
 }
 
@@ -578,18 +721,21 @@ function flyToSite(coords) {
   });
 }
 
-function showDetailDrawer(coords) {
+function showDetailDrawer(coords, shouldFly = false) {
   elDrawer.classList.remove("hidden");
+  document.body.classList.add("drawer-open");
   if (window.innerWidth <= 760) {
     elLeftPanel.classList.add("collapsed");
     elReopenSidebar.classList.remove("hidden");
   }
   setSelectedSite(coords);
-  if (coords) flyToSite(coords);
+  if (shouldFly && coords) flyToSite(coords);
+  requestAnimationFrame(schedulePhotoPins);
 }
 
 function closeDetailDrawer() {
   elDrawer.classList.add("hidden");
+  document.body.classList.remove("drawer-open");
   state.lastDrawer = null;
   state.carouselHandler = null;
   setSelectedSite(null);
@@ -1054,20 +1200,26 @@ function buildHistoricalSignificance(props, dateInfo, wikiResult = null, wdFacts
     lines.push(clean);
   };
 
-  const patron = wdFacts?.patron || wdFacts?.foundedBy || wdFacts?.creator || "";
-  const architect = wdFacts?.architect || "";
-  const periodTag = wdFacts?.timePeriod || "";
+  const patron = wdFacts?.patron || props.patron || wdFacts?.foundedBy || wdFacts?.creator || "";
+  const architect = wdFacts?.architect || props.architect || "";
+  const periodTag = wdFacts?.timePeriod || (props.era && props.era !== "unk" ? ERA_LABELS[props.era] : "") || "";
   if (patron || architect) {
     const parts = [];
-    if (wdFacts?.patron) parts.push(`Commissioned by ${wdFacts.patron}`);
+    if (wdFacts?.patron || props.patron) parts.push(`Commissioned by ${wdFacts?.patron || props.patron}`);
     else if (wdFacts?.foundedBy) parts.push(`Founded by ${wdFacts.foundedBy}`);
     else if (wdFacts?.creator) parts.push(`Created by ${wdFacts.creator}`);
     if (architect && architect !== patron) parts.push(`architect: ${architect}`);
     pushLine(`${parts.join(" · ")}.`);
-    if (wdFacts?.qid) citations.push({ text: `Wikidata ${wdFacts.qid}`, url: `https://www.wikidata.org/wiki/${wdFacts.qid}` });
+    if (wdFacts?.qid || props.qid) {
+      const q = wdFacts?.qid || props.qid;
+      if (/^Q\d+$/i.test(q)) citations.push({ text: `Wikidata ${q}`, url: `https://www.wikidata.org/wiki/${q}` });
+    }
   } else if (periodTag && dateInfo?.yearNum !== null) {
     pushLine(`${periodTag} monument (${dateInfo.builtLabel}).`);
-    if (wdFacts?.qid) citations.push({ text: `Wikidata ${wdFacts.qid}`, url: `https://www.wikidata.org/wiki/${wdFacts.qid}` });
+    if (wdFacts?.qid || props.qid) {
+      const q = wdFacts?.qid || props.qid;
+      if (/^Q\d+$/i.test(q)) citations.push({ text: `Wikidata ${q}`, url: `https://www.wikidata.org/wiki/${q}` });
+    }
   }
 
   if (props.unescoJustification) {
@@ -1140,37 +1292,40 @@ function renderHistoricalSignificanceCard(sig) {
 
 function renderCurrencySwitchHtml() {
   return `
-    <div class="currency-switch" role="group" aria-label="Currency">
-      ${Object.keys(CURRENCY_RATES)
-        .map((c) => `<button type="button" class="currency-btn ${state.currency === c ? "active" : ""}" data-currency="${c}">${c}</button>`)
-        .join("")}
+    <div class="currency-dropdown-wrap">
+      <select id="currency-select" class="currency-select" aria-label="Currency" title="Change display currency">
+        ${Object.entries(CURRENCY_RATES)
+          .map(([c, cfg]) => `<option value="${c}" ${state.currency === c ? "selected" : ""}>${c} (${cfg.symbol})</option>`)
+          .join("")}
+      </select>
     </div>
   `;
 }
 
 function bindDrawerCurrencySwitch() {
-  document.querySelectorAll(".currency-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      state.currency = btn.dataset.currency;
-      if (state.lastDrawer) openMonumentDrawer(state.lastDrawer.props, state.lastDrawer.coords);
-    });
+  const sel = document.getElementById("currency-select");
+  if (!sel) return;
+  sel.addEventListener("change", () => {
+    state.currency = sel.value || "USD";
+    if (state.lastDrawer) openMonumentDrawer(state.lastDrawer.props, state.lastDrawer.coords);
   });
 }
 
-function openMonumentFromCoords(rawProps, coords) {
+function openMonumentFromCoords(rawProps, coords, shouldFly = false) {
   const merged = getMergedProps(rawProps);
-  openMonumentDrawer(merged, coords);
+  openMonumentDrawer(merged, coords, shouldFly);
   if (merged.countryIso && !state.countryShards[merged.countryIso]) {
     ensureCountryShard(merged.countryIso).then(() => {
       if (state.lastDrawer && state.lastDrawer.props.qid === merged.qid) {
         const refreshed = getMergedProps(merged);
+        state.lastDrawer.props = refreshed;
         mountDrawerNearbyNav(refreshed, coords);
       }
     });
   }
 }
 
-function openMonumentDrawer(rawProps, coords) {
+function openMonumentDrawer(rawProps, coords, shouldFly = false) {
   const props = getMergedProps(rawProps);
   state.lastDrawer = { props, coords };
   const dateInfo = extractConstructionInfo(props);
@@ -1182,58 +1337,60 @@ function openMonumentDrawer(rawProps, coords) {
   if (!props.circleExpCr && !props.unesco && !props.hasFunding) gaps.push({ key: "budget", label: "Public maintenance budget not disclosed in central registry" });
 
   const hasPhoto = Boolean(props.image);
-  const badgeText = !hasPhoto && !props.wikipedia ? "! Poorly Covered" : !hasPhoto || gaps.length ? "Partial Coverage" : "Well Documented";
-  const badgeClass = !hasPhoto && !props.wikipedia ? "is-uncovered" : !hasPhoto || gaps.length ? "is-partial" : "is-full";
+  const badgeText = !hasPhoto ? "! Poorly Covered" : gaps.length ? "Partial Coverage" : "Well Documented";
+  const badgeClass = !hasPhoto ? "is-uncovered" : gaps.length ? "is-partial" : "is-full";
 
-  const kpiCells = [];
+  const kpiCards = [];
+  kpiCards.push({
+    label: "Built / Age",
+    val: dateInfo.builtLabel,
+    sub: dateInfo.ageLabel,
+    accent: "",
+    valId: "drawer-age-val",
+    subId: "drawer-age-sub",
+  });
+
   if (props.unesco) {
-    kpiCells.push({
+    kpiCards.push({
       label: props.unescoDanger ? "UNESCO Status" : "UNESCO Listed",
       val: props.unescoDanger ? "In Danger" : props.unescoYear || "Inscribed",
       sub: props.unescoCategory || "World Heritage",
       accent: props.unescoDanger ? "color: var(--c-underfunded)" : "color: var(--c-unesco)",
     });
-  } else {
-    kpiCells.push({
-      label: "Designation",
-      val: props.asiId || "Protected",
-      sub: props.heritageDesignation || "National Heritage",
-      accent: "",
-    });
   }
 
-  if (props.footfallLakhs) {
-    kpiCells.push({
+  const visCount = props.annualVisitors || (props.footfallLakhs ? Math.round(Number(props.footfallLakhs) * 100000) : null);
+  if (visCount) {
+    const compactVis =
+      visCount >= 1_000_000
+        ? `${(visCount / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
+        : visCount >= 1_000
+          ? `${Math.round(visCount / 1_000)}K`
+          : String(visCount);
+    kpiCards.push({
       label: "Annual Visitors",
-      val: `${props.footfallLakhs}L`,
-      sub: `~${Math.round(props.footfallLakhs * 100000).toLocaleString()} / yr`,
+      val: compactVis,
+      sub: `~${visCount.toLocaleString()} / yr`,
       accent: "color: var(--c-footfall)",
-    });
-  } else {
-    kpiCells.push({
-      label: "Global Notability",
-      val: props.sitelinks ? `${props.sitelinks} Wikis` : "Registry",
-      sub: props.isMostVisited ? "Top global landmark" : "Wikidata coverage",
-      accent: props.isMostVisited ? "color: var(--c-footfall)" : "",
     });
   }
 
   if (props.revenueCr) {
-    kpiCells.push({
+    kpiCards.push({
       label: "Ticket Revenue",
       val: formatMoneyCr(props.revenueCr, true),
       sub: props.ticketFy || "Annual ticket receipt",
       accent: "",
     });
   } else if (props.circlePerSiteLakh) {
-    kpiCells.push({
-      label: "Circle Allocation",
+    kpiCards.push({
+      label: "Site Budget (Est.)",
       val: formatMoneyLakh(props.circlePerSiteLakh, true),
       sub: props.circleName || "ASI FY 2023–24",
       accent: props.underfundedCircle ? "color: var(--c-underfunded)" : "color: var(--c-adopt)",
     });
-  } else if (props.unescoAreaHa) {
-    kpiCells.push({
+  } else if (props.unescoAreaHa && kpiCards.length < 3) {
+    kpiCards.push({
       label: "Protected Area",
       val: `${Math.round(Number(props.unescoAreaHa)).toLocaleString()} ha`,
       sub: "UNESCO boundary",
@@ -1242,136 +1399,304 @@ function openMonumentDrawer(rawProps, coords) {
   }
 
   const metaRows = [];
-  if (props.country) metaRows.push(["Country", props.country]);
-  if (props.region) metaRows.push(["Region / State", props.region]);
-  if (props.location) metaRows.push(["District / City", props.location]);
-  metaRows.push(["Protection", props.heritageDesignation || "National Heritage"]);
-  if (props.unesco) metaRows.push(["UNESCO Heritage", `${props.unesco}${props.unescoYear ? ` (${props.unescoYear})` : ""}`]);
+  metaRows.push(["Government Recognition", props.heritageDesignation || "Government-Recognized Heritage"]);
+  if (props.unesco) metaRows.push(["UNESCO World Heritage", `${props.unesco}${props.unescoYear ? ` (${props.unescoYear})` : ""}`]);
   if (props.unescoCriteria) metaRows.push(["UNESCO Criteria", props.unescoCriteria]);
+  if (visCount) metaRows.push(["Annual Visitors", `~${visCount.toLocaleString()} / yr${visCount >= 500000 ? " (Most Visited 500K+)" : ""}`]);
   metaRows.push(["Built / Historical Date", dateInfo.builtLabel]);
+  metaRows.push(["Monument Age", dateInfo.ageLabel]);
   if (props.siteType) metaRows.push(["Category", props.siteType]);
   if (props.style) metaRows.push(["Architecture", props.style]);
+  if (props.material) metaRows.push(["Material", props.material]);
+  if (props.period) metaRows.push(["Historical Period", props.period]);
+  if (props.architect) metaRows.push(["Architect", props.architect]);
+  if (props.patron) metaRows.push(["Patron", props.patron]);
+  if (props.location) metaRows.push(["City / Locality", props.location]);
+  if (props.region) metaRows.push(["Region / State", props.region]);
+  if (props.country) metaRows.push(["Country / Territory", props.country]);
+  if (props.contestedArea) metaRows.push(["Contested Territory", props.contestedArea]);
   if (props.circleName) metaRows.push(["ASI Circle", props.circleName]);
 
   const initialSig = buildHistoricalSignificance(props, dateInfo, null, null);
 
   let statusClass = "is-routine";
   let statusText = "Registry Monitored";
-  let statusNote = "Listed under national or international heritage protection with no active crisis alert.";
+  let statusNote = "Listed under national or international architectural protection with no active crisis alert.";
   if (props.unescoDanger) {
     statusClass = "is-underfunded";
     statusText = "UNESCO In Danger";
     statusNote = "Flagged on the official UNESCO List of World Heritage in Danger requiring urgent conservation.";
   } else if (props.inRestoration || props.adoptPartner) {
     statusClass = "is-active";
-    statusText = props.adoptPartner ? `Partnered (${props.adoptPartner})` : "Active Conservation";
-    statusNote = props.adoptScope || "Ongoing heritage conservation / visitor infrastructure program recorded.";
+    statusText = props.adoptPartner ? `Partnered (${props.adoptPartner})` : props.conservationState || "Active Conservation";
+    statusNote = props.adoptScope || "Ongoing heritage conservation / restoration program recorded.";
   } else if (props.underfundedCircle) {
     statusClass = "is-underfunded";
     statusText = "Underfunded Circle";
     statusNote = "Situated in an ASI circle averaging below ₹8.5L per monument in FY 2023–24.";
+  } else if (props.underfunded && props.conservationState) {
+    statusClass = "is-underfunded";
+    statusText = `Conservation Alert (${props.conservationState})`;
+    statusNote = `Recorded in Wikidata P5816 state of conservation as "${props.conservationState}".`;
   }
 
   const extLinks = [];
-  if (props.wikipedia) extLinks.push(`<a href="${escapeHtml(props.wikipedia)}" target="_blank" rel="noopener">Wikipedia ↗</a>`);
-  if (props.qid && /^Q\d+$/i.test(props.qid)) extLinks.push(`<a href="https://www.wikidata.org/wiki/${encodeURIComponent(props.qid)}" target="_blank" rel="noopener">Wikidata (${escapeHtml(props.qid)}) ↗</a>`);
-  if (props.unescoId) extLinks.push(`<a href="https://whc.unesco.org/en/list/${encodeURIComponent(props.unescoId)}" target="_blank" rel="noopener">UNESCO WHC #${escapeHtml(props.unescoId)} ↗</a>`);
-  if (coords) extLinks.push(`<a href="https://www.openstreetmap.org/?mlat=${coords[1]}&mlon=${coords[0]}#map=17/${coords[1]}/${coords[0]}" target="_blank" rel="noopener">OpenStreetMap ↗</a>`);
+  if (props.wikipedia) extLinks.push(`<a class="detail-link" data-link-kind="wikipedia" href="${escapeHtml(props.wikipedia)}" target="_blank" rel="noopener">Wikipedia ↗</a>`);
+  if (props.qid && /^Q\d+$/i.test(props.qid)) extLinks.push(`<a class="detail-link" href="https://www.wikidata.org/wiki/${encodeURIComponent(props.qid)}" target="_blank" rel="noopener">Wikidata ↗</a>`);
+  if (props.unescoId) extLinks.push(`<a class="detail-link" href="https://whc.unesco.org/en/list/${encodeURIComponent(props.unescoId)}" target="_blank" rel="noopener">UNESCO WHC #${escapeHtml(props.unescoId)} ↗</a>`);
+  extLinks.push(
+    `<a class="detail-link" href="https://commons.wikimedia.org/w/index.php?search=${encodeURIComponent(
+      `${props.name} ${props.country || ""}`.trim()
+    )}" target="_blank" rel="noopener">Commons ↗</a>`
+  );
+
+  const badges = [];
+  if (props.asiId) badges.push(`<span class="badge">${String(props.asiId).toUpperCase().startsWith("S-") ? "State" : "ASI"} ${escapeHtml(props.asiId)}</span>`);
+  else if (props.heritageDesignation) {
+    const shortDes = String(props.heritageDesignation).length > 26
+      ? `${String(props.heritageDesignation).slice(0, 24).trim()}…`
+      : String(props.heritageDesignation);
+    badges.push(`<span class="badge" title="${escapeHtml(props.heritageDesignation)}">${escapeHtml(shortDes)}</span>`);
+  }
+  if (props.unesco) badges.push(`<span class="badge badge-unesco">UNESCO World Heritage${props.unescoYear ? ` · ${escapeHtml(props.unescoYear)}` : ""}</span>`);
+  if (props.contested) badges.push(`<span class="badge badge-flagged">Contested Territory</span>`);
+  if (props.isMostVisited) badges.push(`<span class="badge badge-footfall">Most Visited (500K+)</span>`);
+  if (props.hasFunding && !props.underfunded) badges.push(`<span class="badge badge-adopt">Funded / Protected</span>`);
+  if (!hasPhoto) badges.push(`<span class="badge badge-uncovered" id="coverage-badge"><span class="legend-excl" aria-hidden="true">!</span>Poorly Covered · No Photo</span>`);
 
   const reports = state.reports[props.qid] || [];
+  const issueOptions = [
+    "Structural Decay / Cracks",
+    "Encroachment / Buffer Risk",
+    "Missing Signage / Lighting",
+    "Sanitation / Visitor Amenities",
+    "Restoration Verified",
+  ];
+  let selectedIssue = issueOptions[0];
+
+  let fundingTierClass = "tier-unknown";
+  let fundingTierLabel = "Public Registry · Undisclosed";
+  let fundingLeftLabel = "Site Allocation";
+  let fundingLeftVal = "Not Line-Itemed";
+  let fundingLeftSub = `Statutory protection via ${props.country || "national"} heritage budget; site-level outlay unpublished`;
+  let fundingRightLabel = "Steward / Authority";
+  let fundingRightVal = props.heritageDesignation || `${props.country || "National"} Heritage Registry`;
+  let fundingRightSub = `${props.country || "National"} Ministry / Trust`;
+  let fundingCitation = "Evaluated from UNESCO World Heritage Fund / Danger records, Wikidata P5816 conservation state & patronage, and national statutory heritage registries.";
+
+  if (props.circlePerSiteLakh || props.revenueCr) {
+    fundingTierClass = props.underfundedCircle ? "tier-poor" : "tier-good";
+    fundingTierLabel = props.underfundedCircle ? "Underfunded Circle" : "Budget Disclosed";
+    fundingLeftLabel = "Site / Ticket Estimate";
+    fundingLeftVal = props.revenueCr ? formatMoneyCr(props.revenueCr, true) : formatMoneyLakh(props.circlePerSiteLakh || 0, true);
+    fundingLeftSub = props.revenueCr ? props.ticketFy || "Annual ticket revenue" : props.circleName || "Circle average";
+    fundingRightLabel = "ASI Circle";
+    fundingRightVal = props.circleExpCr ? formatMoneyCr(props.circleExpCr, true) : "—";
+    fundingRightSub = props.circleName || "Ministry of Culture FY 2023–24";
+    fundingCitation = "FY 2023–24 PIB circle budgets, Adopt a Heritage 2.0 & PRASHAD.";
+  } else if (props.unescoDanger) {
+    fundingTierClass = "tier-poor";
+    fundingTierLabel = "Emergency Aid Needed";
+    fundingLeftVal = "Critical Shortfall";
+    fundingLeftSub = "Inscribed on the UNESCO List of World Heritage in Danger; urgent international conservation aid flagged";
+    fundingRightVal = "UNESCO WHF + National Govt";
+    fundingRightSub = props.heritageDesignation || "Emergency Assistance Eligible";
+  } else if (props.underfunded) {
+    fundingTierClass = "tier-poor";
+    fundingTierLabel = "Conservation / Funding Risk";
+    fundingLeftVal = "Underfunded / At Risk";
+    fundingLeftSub = props.conservationState ? `Wikidata conservation status: ${props.conservationState}` : "Maintenance or conservation resource gap recorded";
+    fundingRightVal = props.unesco ? "UNESCO + National Registry" : `${props.country || "National"} Ministry`;
+    fundingRightSub = props.heritageDesignation || "National Statutory Protection";
+  } else if (props.hasFunding || props.unesco || props.adoptPartner) {
+    fundingTierClass = "tier-good";
+    fundingTierLabel = props.adoptPartner ? "Sponsor / Grant Funded" : props.unesco ? "UNESCO + National Funded" : "Government Funded";
+    fundingLeftVal = props.adoptPartner ? `Partner: ${props.adoptPartner}` : "Active Grant / Program";
+    fundingLeftSub = props.adoptScope || (props.unesco ? "Eligible for UNESCO World Heritage Fund & national conservation outlays" : "Dedicated national conservation or restoration funding verified");
+    fundingRightVal = props.unesco ? "UNESCO WHC + National Govt" : `${props.country || "National"} Heritage Trust`;
+    fundingRightSub = props.heritageDesignation || "Protected Budget Allocation";
+  }
+
+  const fundingHealthHtml = `
+    <div class="funding-health-card">
+      <div class="funding-health-head">
+        <span class="funding-health-title">Funding Health</span>
+        <span class="funding-tier-badge ${fundingTierClass}">${escapeHtml(fundingTierLabel)}</span>
+      </div>
+      <div class="budget-split-grid">
+        <div class="budget-split-box">
+          <span class="budget-split-label">${escapeHtml(fundingLeftLabel)}</span>
+          <span class="budget-split-val">${escapeHtml(fundingLeftVal)}</span>
+          <span class="budget-split-sub">${escapeHtml(fundingLeftSub)}</span>
+        </div>
+        <div class="budget-split-box">
+          <span class="budget-split-label">${escapeHtml(fundingRightLabel)}</span>
+          <span class="budget-split-val">${escapeHtml(fundingRightVal)}</span>
+          <span class="budget-split-sub">${escapeHtml(fundingRightSub)}</span>
+        </div>
+      </div>
+      ${citeHtml(fundingCitation)}
+    </div>
+  `;
+
+  const recognitionBodies = [];
+  const rawDesignation = String(props.heritageDesignation || "").trim();
+  const isGenericDes = !rawDesignation || /^(Government-Recognized Heritage|National Architectural Heritage|Government-Designated Heritage)$/i.test(rawDesignation);
+  const govAuthorityLabel = props.asiId
+    ? `Government of India · ${String(props.asiId).toUpperCase().startsWith("S-") ? "State Archaeology Registry" : "Archaeological Survey of India (ASI)"}`
+    : `${props.country || "National"} Statutory Heritage Registry`;
+  if (props.unesco) {
+    recognitionBodies.push(`UNESCO World Heritage${props.unescoYear ? ` (Inscribed ${props.unescoYear})` : ""}`);
+  }
+  if (!isGenericDes && !/^UNESCO/i.test(rawDesignation)) {
+    recognitionBodies.push(`${rawDesignation} (${govAuthorityLabel})`);
+  } else if (!props.unesco || props.asiId || rawDesignation) {
+    recognitionBodies.push(govAuthorityLabel);
+  }
+  const recognitionPill =
+    props.unesco && !isGenericDes
+      ? "UNESCO + Government"
+      : props.unesco
+        ? "UNESCO Recognized"
+        : "Government Recognized";
+  const recognitionPillClass = props.unesco ? "is-active" : "is-routine";
+  const recognitionHtml = `
+    <div class="restoration-status-row">
+      <div class="funding-health-head" style="margin-bottom:2px;">
+        <span class="funding-health-title">Official Recognition</span>
+        <span class="restoration-status-pill ${recognitionPillClass}">${escapeHtml(recognitionPill)}</span>
+      </div>
+      <div class="budget-split-sub">${escapeHtml(recognitionBodies.join(" · "))}</div>
+    </div>
+  `;
 
   elDetailContent.innerHTML = `
-    <div class="drawer-header">
-      <div class="drawer-eyebrow">
-        <span class="coverage-pill ${badgeClass}" id="coverage-badge" data-uncovered="${!hasPhoto && !props.wikipedia ? "true" : "false"}">${!hasPhoto && !props.wikipedia ? '<span class="legend-excl" aria-hidden="true">!</span>' : ""}${escapeHtml(badgeText)}</span>
-        ${renderCurrencySwitchHtml()}
-      </div>
-      <h2>${escapeHtml(props.name)}</h2>
-      <div class="drawer-subtitle">${escapeHtml([props.location, props.region, props.country].filter(Boolean).join(" · "))}</div>
-    </div>
-
     <div id="drawer-media-mount">
       ${hasPhoto ? renderCarouselHtml([{ url: hiResUrl(props.image), caption: `${props.name} · Primary Archive Photo`, credit: "Wikimedia Commons" }]) : renderSatelliteFallbackHtml(props, coords, true)}
     </div>
 
-    <div class="drawer-body">
-      <div class="kpi-strip ${kpiCells.length >= 3 ? "" : ""}">
-        ${kpiCells
-          .map(
-            (k) => `
-          <div class="kpi-cell">
-            <span class="kpi-label">${escapeHtml(k.label)}</span>
-            <span class="kpi-val" ${k.accent ? `style="${k.accent}"` : ""}>${escapeHtml(k.val)}</span>
-            <span class="kpi-sub">${escapeHtml(k.sub)}</span>
-          </div>`
-          )
-          .join("")}
-      </div>
-
-      <p class="wiki-summary" id="wiki-summary-mount">Loading verified overview…</p>
-      <div id="history-sig-mount">${initialSig ? renderHistoricalSignificanceCard(initialSig) : ""}</div>
-
-      <div class="restoration-status-row">
-        <div class="funding-health-head" style="margin-bottom:2px;">
-          <span class="funding-health-title">Conservation Status</span>
-          <span class="restoration-status-pill ${statusClass}">${escapeHtml(statusText)}</span>
-        </div>
-        <div class="budget-split-sub">${escapeHtml(statusNote)}</div>
-      </div>
-
-      ${
-        gaps.length
-          ? `<div class="coverage-gaps-card" id="coverage-gaps-card">
-              <div class="coverage-gaps-title">Documentation gaps (${gaps.length})</div>
-              <div class="coverage-checklist">
-                ${gaps
-                  .map(
-                    (g) => `
-                  <div class="coverage-check-item" data-gap="${escapeHtml(g.key)}">
-                    <span class="coverage-check-icon" aria-hidden="true">!</span>
-                    <span>${escapeHtml(g.label)}</span>
-                  </div>`
-                  )
-                  .join("")}
-              </div>
-            </div>`
-          : ""
-      }
-
-      <div class="meta-block">
-        ${metaRows
-          .map(
-            ([k, v]) =>
-              `<div class="meta-row"><span class="meta-label">${escapeHtml(k)}</span><span class="meta-val" ${k === "Built / Historical Date" ? 'id="meta-built-val"' : ""}>${escapeHtml(v)}</span></div>`
-          )
-          .join("")}
-      </div>
-
-      ${extLinks.length ? `<div class="external-links-row">${extLinks.join("")}</div>` : ""}
-
-      <div class="report-card">
-        <div class="funding-health-head"><span class="funding-health-title">Community Field Note</span></div>
-        <form id="report-form" class="report-form">
-          <select id="report-category" aria-label="Field observation category">
-            <option value="Photo Verified">On-Site Photo / Condition Checked</option>
-            <option value="Restoration Needed">Conservation / Repair Needed</option>
-            <option value="Accessibility Update">Visitor Access / Signage Update</option>
-          </select>
-          <textarea id="report-note" rows="2" placeholder="Add verified on-site condition note…"></textarea>
-          <div style="display:flex; gap:8px;">
-            <button type="submit" class="primary-btn" style="flex:1;">Save Local Note</button>
-            <button type="button" class="text-btn" id="export-reports-btn">Export JSON</button>
-          </div>
-        </form>
-        ${
-          reports.length
-            ? `<div class="saved-reports-list">${reports
-                .map((r) => `<div class="saved-report-item"><b>${escapeHtml(r.category)}</b> (${escapeHtml(r.date)}): ${escapeHtml(r.note)}</div>`)
-                .join("")}</div>`
-            : ""
-        }
+    <div class="v-head-grid">
+      <div>
+        <h2 class="detail-title">${escapeHtml(props.name)}</h2>
+        <div class="detail-kicker">${escapeHtml([props.location, props.region, props.country].filter(Boolean).join(" · "))}</div>
       </div>
     </div>
+
+    <div class="drawer-subbar">
+      <div class="detail-badges" style="margin:0;">${badges.slice(0, 5).join("")}</div>
+      ${renderCurrencySwitchHtml()}
+    </div>
+
+    <div class="detail-desc" id="wiki-summary-mount">
+      ${
+        state.wikiCache[props.qid || props.name]?.text
+          ? escapeHtml(state.wikiCache[props.qid || props.name].text)
+          : `<div class="skeleton-block" aria-label="Loading site summary"><span class="skeleton-line w-full"></span><span class="skeleton-line w-88"></span><span class="skeleton-line w-72"></span></div>`
+      }
+    </div>
+    ${citeHtml("Synthesized from UNESCO, Wikidata, and linked Wikipedia lead summary.")}
+    <div style="margin-bottom:14px;"></div>
+
+    <div class="kpi-strip${kpiCards.length >= 4 ? " is-four" : ""}">
+      ${kpiCards
+        .slice(0, 4)
+        .map(
+          (k) => `
+        <div class="kpi-card">
+          <span class="kpi-label">${escapeHtml(k.label)}</span>
+          <span class="kpi-val" ${k.valId ? `id="${escapeHtml(k.valId)}"` : ""} ${k.accent ? `style="${k.accent}"` : ""}>${escapeHtml(k.val)}</span>
+          <span class="kpi-sub" ${k.subId ? `id="${escapeHtml(k.subId)}"` : ""}>${escapeHtml(k.sub)}</span>
+        </div>`
+        )
+        .join("")}
+    </div>
+
+    <div id="history-sig-mount">${
+      !props.qid || state.wdFactsCache[props.qid]
+        ? initialSig
+          ? renderHistoricalSignificanceCard(initialSig)
+          : ""
+        : `<div class="skeleton-card" aria-label="Loading historical context"><div class="skeleton-block"><span class="skeleton-line w-44"></span><span class="skeleton-line w-full"></span><span class="skeleton-line w-72"></span></div></div>`
+    }</div>
+
+    ${recognitionHtml}
+
+    ${fundingHealthHtml}
+
+    <div class="restoration-status-row">
+      <div class="funding-health-head" style="margin-bottom:2px;">
+        <span class="funding-health-title">Conservation Status</span>
+        <span class="restoration-status-pill ${statusClass}">${escapeHtml(statusText)}</span>
+      </div>
+      <div class="budget-split-sub">${escapeHtml(statusNote)}</div>
+    </div>
+
+    <div class="meta-block">
+      ${metaRows
+        .map(
+          ([k, v]) =>
+            `<div class="meta-row"><span class="meta-label">${escapeHtml(k)}</span><span class="meta-val" ${
+              k === "Built / Historical Date"
+                ? 'id="meta-built-val"'
+                : k === "Monument Age"
+                  ? 'id="meta-age-val"'
+                  : ""
+            }>${escapeHtml(v)}</span></div>`
+        )
+        .join("")}
+    </div>
+    ${citeHtml(`${props.heritageDesignation || "National Architectural Register"}${props.qid ? ` · Wikidata ${props.qid}` : ""}.`, props.qid && /^Q\d+$/i.test(props.qid) ? `https://www.wikidata.org/wiki/${props.qid}` : "")}
+
+    ${
+      gaps.length
+        ? `<div class="coverage-gaps-card" id="coverage-gaps-card">
+            <div class="coverage-gaps-title">Why coverage is marked incomplete (${gaps.length} gap${gaps.length > 1 ? "s" : ""})</div>
+            <div class="coverage-checklist">
+              ${gaps
+                .map(
+                  (g) => `
+                <div class="coverage-check-item" data-gap="${escapeHtml(g.key)}">
+                  <span class="coverage-check-icon" aria-hidden="true">!</span>
+                  <span>${escapeHtml(g.label)}</span>
+                </div>`
+                )
+                .join("")}
+            </div>
+            ${citeHtml("Audited live against Wikimedia Commons media, linked Wikipedia pages, and Wikidata/UNESCO architectural fields.")}
+          </div>`
+        : ""
+    }
+
+    ${extLinks.length ? `<div class="detail-links" id="detail-links">${extLinks.join("")}</div>` : ""}
+
+    <details class="report-box" ${reports.length ? "open" : ""}>
+      <summary>
+        <span>Flag maintenance or conservation issue${reports.length ? ` (${reports.length})` : ""}</span>
+        <span class="report-chevron" aria-hidden="true">▾</span>
+      </summary>
+      <form id="report-form">
+        <div class="issue-chips" role="radiogroup" aria-label="Issue category">
+          ${issueOptions
+            .map(
+              (opt, idx) =>
+                `<button type="button" class="issue-chip ${idx === 0 ? "active" : ""}" data-issue="${escapeHtml(opt)}">${escapeHtml(opt)}</button>`
+            )
+            .join("")}
+        </div>
+        <textarea id="report-note" rows="2" placeholder="Describe the issue or verify conservation work (saved locally)…"></textarea>
+        <div class="report-actions">
+          <button type="submit" class="btn-primary">Submit Flag</button>
+          <button type="button" class="btn-secondary" id="export-reports-btn">Export JSON</button>
+        </div>
+      </form>
+      ${
+        reports.length
+          ? reports
+              .map((r) => `<div class="report-item"><b>${escapeHtml(r.category)}</b> · ${escapeHtml(r.date)}${r.note ? `<br/>${escapeHtml(r.note)}` : ""}</div>`)
+              .join("")
+          : ""
+      }
+    </details>
   `;
 
   bindDrawerCurrencySwitch();
@@ -1380,29 +1705,51 @@ function openMonumentDrawer(rawProps, coords) {
   Promise.all([fetchWikiTwoSentences(props), fetchWikidataHistoryFacts(props.qid)]).then(([wikiResult, wdFacts]) => {
     if (!state.lastDrawer || state.lastDrawer.props.qid !== props.qid) return;
     const sumEl = document.getElementById("wiki-summary-mount");
-    if (sumEl && wikiResult?.text) {
-      sumEl.innerHTML = `${escapeHtml(wikiResult.text)} ${
-        wikiResult.url ? `<a href="${escapeHtml(wikiResult.url)}" target="_blank" rel="noopener" style="white-space:nowrap;">${escapeHtml(wikiResult.source)} ↗</a>` : ""
-      }`;
+    if (sumEl) {
+      sumEl.textContent = wikiResult?.text || buildFallbackTwoSentenceSummary(props).text;
+    }
+    const linksEl = document.getElementById("detail-links");
+    if (linksEl && wikiResult?.url && /^https?:\/\/[^.]+\.wikipedia\.org\//i.test(wikiResult.url)) {
+      if (!linksEl.querySelector('[data-link-kind="wikipedia"]')) {
+        linksEl.insertAdjacentHTML(
+          "afterbegin",
+          `<a class="detail-link" data-link-kind="wikipedia" href="${escapeHtml(wikiResult.url)}" target="_blank" rel="noopener">Wikipedia ↗</a>`
+        );
+      }
     }
     const updatedDate = extractConstructionInfo(props, wdFacts?.rawYear ?? null);
     const builtEl = document.getElementById("meta-built-val");
-    if (builtEl && updatedDate.yearNum !== null) builtEl.textContent = updatedDate.builtLabel;
+    const ageEl = document.getElementById("meta-age-val");
+    const kpiAgeVal = document.getElementById("drawer-age-val");
+    const kpiAgeSub = document.getElementById("drawer-age-sub");
+    if (updatedDate.yearNum !== null) {
+      if (builtEl) builtEl.textContent = updatedDate.builtLabel;
+      if (ageEl) ageEl.textContent = updatedDate.ageLabel;
+      if (kpiAgeVal) kpiAgeVal.textContent = updatedDate.builtLabel;
+      if (kpiAgeSub) kpiAgeSub.textContent = updatedDate.ageLabel;
+    }
 
     const sig = buildHistoricalSignificance(props, updatedDate, wikiResult, wdFacts);
     const sigMount = document.getElementById("history-sig-mount");
     if (sigMount) sigMount.innerHTML = renderHistoricalSignificanceCard(sig);
   });
 
+  document.querySelectorAll(".issue-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      document.querySelectorAll(".issue-chip").forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      selectedIssue = chip.dataset.issue || selectedIssue;
+    });
+  });
+
   document.getElementById("report-form").addEventListener("submit", (ev) => {
     ev.preventDefault();
-    const category = document.getElementById("report-category").value;
     const note = document.getElementById("report-note").value.trim();
     const list = state.reports[props.qid] || [];
-    list.unshift({ qid: props.qid, name: props.name, category, note, date: new Date().toISOString().slice(0, 10) });
+    list.unshift({ qid: props.qid, name: props.name, category: selectedIssue, note, date: new Date().toISOString().slice(0, 10) });
     state.reports[props.qid] = list;
     saveReports();
-    openMonumentDrawer(props, coords);
+    openMonumentDrawer(props, coords, false);
   });
 
   document.getElementById("export-reports-btn").addEventListener("click", () => {
@@ -1410,13 +1757,13 @@ function openMonumentDrawer(rawProps, coords) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "monument-map-world-reports.json";
+    a.download = "architecture-monument-atlas-reports.json";
     a.click();
     URL.revokeObjectURL(url);
   });
 
   mountDrawerNearbyNav(props, coords);
-  showDetailDrawer(coords);
+  showDetailDrawer(coords, shouldFly);
 }
 
 // ---------- Nearby Swipe Navigation ----------
@@ -1466,24 +1813,193 @@ function navigateNearby(delta) {
 }
 
 // ---------- Map Style & Vector Layers ----------
+// ---------- Map Style (India Apple Maps Aesthetic + Crisp Borders + Contested + Global Place Labels) ----------
 function attachOverlayLayers() {
-  const styleLayers = map.getStyle().layers || [];
   const hasOpenMapTiles = Boolean(map.getSource("openmaptiles"));
-  const firstLabelId = styleLayers.find((l) => l.type === "symbol")?.id;
 
   if (hasOpenMapTiles) {
-    const basePalette = [
-      { id: "om-water", type: "fill", "source-layer": "water", paint: { "fill-color": "#c9dfee" } },
-      { id: "om-park", type: "fill", "source-layer": "park", paint: { "fill-color": "#e3eadc", "fill-opacity": 0.7 } },
-      { id: "om-landuse", type: "fill", "source-layer": "landuse", filter: ["in", "class", "park", "wood", "forest", "grass", "cemetery"], paint: { "fill-color": "#e4ebdd", "fill-opacity": 0.65 } },
-      { id: "om-waterway", type: "line", "source-layer": "waterway", paint: { "line-color": "#bcd7ea", "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.5, 12, 1.8] } },
-      { id: "om-roads", type: "line", "source-layer": "transportation", filter: ["in", "class", "motorway", "trunk", "primary", "secondary"], minzoom: 5, paint: { "line-color": "#ffffff", "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.4, 12, 2.4], "line-opacity": 0.85 } },
+    const appleMapLayers = [
+      {
+        id: "om-water",
+        type: "fill",
+        "source-layer": "water",
+        paint: { "fill-color": "#cbe5f7", "fill-opacity": 0.94 },
+      },
+      {
+        id: "om-waterway",
+        type: "line",
+        "source-layer": "waterway",
+        minzoom: 4.5,
+        paint: {
+          "line-color": "#80bee9",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 4.5, 0.7, 9, 1.4, 14, 3.0],
+          "line-opacity": 0.85,
+        },
+      },
+      {
+        id: "om-park",
+        type: "fill",
+        "source-layer": "park",
+        minzoom: 8.0,
+        paint: {
+          "fill-color": "#c7e4c0",
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.45, 11, 0.78],
+        },
+      },
+      {
+        id: "om-landcover",
+        type: "fill",
+        "source-layer": "landcover",
+        filter: ["match", ["get", "class"], ["wood", "forest", "grass", "wetland"], true, false],
+        minzoom: 8.5,
+        paint: {
+          "fill-color": "#d5ebd0",
+          "fill-opacity": ["interpolate", ["linear"], ["zoom"], 8.5, 0.35, 12, 0.6],
+        },
+      },
+      {
+        id: "om-road-casing",
+        type: "line",
+        "source-layer": "transportation",
+        filter: ["match", ["get", "class"], ["motorway", "trunk", "primary", "secondary", "tertiary"], true, false],
+        minzoom: 6.8,
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#c8c6be",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 6.8, 1.3, 10, 3.0, 14, 7.2],
+        },
+      },
+      {
+        id: "om-road-inner",
+        type: "line",
+        "source-layer": "transportation",
+        filter: ["match", ["get", "class"], ["motorway", "trunk", "primary", "secondary", "tertiary"], true, false],
+        minzoom: 6.8,
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#ffffff",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 6.8, 0.7, 10, 1.9, 14, 5.2],
+        },
+      },
+      {
+        id: "om-road-minor",
+        type: "line",
+        "source-layer": "transportation",
+        filter: ["match", ["get", "class"], ["minor", "service"], true, false],
+        minzoom: 12.0,
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": "#dcd9d0",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.8, 16, 3.5],
+        },
+      },
+      {
+        id: "om-building",
+        type: "fill-extrusion",
+        "source-layer": "building",
+        minzoom: 13.0,
+        paint: {
+          "fill-extrusion-color": "#e3e0d8",
+          "fill-extrusion-height": ["coalesce", ["get", "render_height"], 12],
+          "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
+          "fill-extrusion-opacity": ["interpolate", ["linear"], ["zoom"], 13.0, 0.0, 14.5, 0.88],
+        },
+      },
+      // Soft, low-contrast country, state & disputed borders matching Apple Maps paper aesthetic
+      {
+        id: "om-border-admin",
+        type: "line",
+        "source-layer": "boundary",
+        filter: ["all", ["==", ["get", "admin_level"], 2], ["!=", ["get", "maritime"], 1], ["!=", ["get", "disputed"], 1], ["!", ["has", "claimed_by"]]],
+        layout: { "line-cap": "round", "line-join": "round", visibility: state.showCountryBorders ? "visible" : "none" },
+        paint: {
+          "line-color": "#b4bac0",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 1, 0.55, 5, 0.9, 10, 1.25],
+          "line-opacity": 0.62,
+        },
+      },
+      {
+        id: "om-border-sub",
+        type: "line",
+        "source-layer": "boundary",
+        filter: ["all", [">=", ["get", "admin_level"], 3], ["<=", ["get", "admin_level"], 4], ["!=", ["get", "maritime"], 1], ["!=", ["get", "disputed"], 1], ["!", ["has", "claimed_by"]]],
+        minzoom: 4.0,
+        paint: {
+          "line-color": "#c9ced4",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 4, 0.5, 8, 0.95],
+          "line-dasharray": [3, 2],
+          "line-opacity": 0.52,
+        },
+      },
+      {
+        id: "om-border-disputed",
+        type: "line",
+        "source-layer": "boundary",
+        filter: ["all", ["!=", ["get", "maritime"], 1], ["any", ["==", ["get", "disputed"], 1], ["has", "claimed_by"]]],
+        layout: { visibility: state.showCountryBorders ? "visible" : "none" },
+        paint: {
+          "line-color": "#989fa6",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 1, 0.65, 6, 0.95],
+          "line-dasharray": [2.5, 2],
+          "line-opacity": 0.58,
+        },
+      },
     ];
-    for (const def of basePalette) {
+    for (const def of appleMapLayers) {
       if (!map.getLayer(def.id)) {
-        map.addLayer({ source: "openmaptiles", ...def }, firstLabelId);
+        map.addLayer({ source: "openmaptiles", ...def });
       }
     }
+  }
+
+  // Global major & regional rivers (Natural Earth) so river basins show clearly at all zoom levels
+  if (state.riversGeo && !map.getSource("world-rivers")) {
+    map.addSource("world-rivers", { type: "geojson", data: state.riversGeo });
+    map.addLayer({
+      id: "world-rivers-minor",
+      type: "line",
+      source: "world-rivers",
+      filter: [">", ["get", "scalerank"], 4],
+      minzoom: 3.0,
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": "#7bbbef",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.65, 8, 1.45, 12, 2.2],
+        "line-opacity": 0.78,
+      },
+    });
+    map.addLayer({
+      id: "world-rivers-major",
+      type: "line",
+      source: "world-rivers",
+      filter: ["<=", ["get", "scalerank"], 4],
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": "#55a4e5",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 1.5, 0.85, 5, 1.5, 10, 2.6],
+        "line-opacity": 0.88,
+      },
+    });
+    map.addLayer({
+      id: "world-rivers-labels",
+      type: "symbol",
+      source: "world-rivers",
+      filter: ["all", ["!=", ["get", "name"], ""], ["<=", ["get", "scalerank"], 4]],
+      minzoom: 4.2,
+      layout: {
+        "symbol-placement": "line",
+        "text-field": ["get", "name"],
+        "text-font": ["Noto Sans Italic"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 4.2, 8.8, 8, 10.6],
+        "text-letter-spacing": 0.12,
+        "symbol-spacing": 380,
+      },
+      paint: {
+        "text-color": "#3d7cb0",
+        "text-halo-color": "rgba(255, 255, 255, 0.88)",
+        "text-halo-width": 1.4,
+      },
+    });
   }
 
   if (state.countriesGeo && !map.getSource("world-countries")) {
@@ -1495,23 +2011,245 @@ function attachOverlayLayers() {
       paint: { "fill-color": "transparent" },
     });
     map.addLayer({
-      id: "countries-line",
-      type: "line",
-      source: "world-countries",
-      layout: { visibility: state.showCountryBorders ? "visible" : "none" },
-      paint: {
-        "line-color": "#b7b5ad",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 1, 0.5, 6, 1.15],
-        "line-opacity": 0.8,
-      },
-    });
-    map.addLayer({
       id: "country-active-line",
       type: "line",
       source: "world-countries",
       filter: ["==", ["get", "iso3"], "__NONE__"],
-      paint: { "line-color": "#18191a", "line-width": 2.1, "line-opacity": 0.9 },
+      paint: { "line-color": "#687078", "line-width": 1.8, "line-opacity": 0.78 },
     });
+  }
+
+  if (state.contestedGeo && !map.getSource("contested-areas")) {
+    map.addSource("contested-areas", { type: "geojson", data: state.contestedGeo });
+    map.addLayer({
+      id: "contested-areas-fill",
+      type: "fill",
+      source: "contested-areas",
+      paint: {
+        "fill-color": "#dc2626",
+        "fill-opacity": 0.04,
+      },
+    });
+    map.addLayer({
+      id: "contested-areas-line",
+      type: "line",
+      source: "contested-areas",
+      paint: {
+        "line-color": "#b58282",
+        "line-width": 0.9,
+        "line-dasharray": [3, 2],
+        "line-opacity": 0.42,
+      },
+    });
+    map.addLayer({
+      id: "contested-areas-label",
+      type: "symbol",
+      source: "contested-areas",
+      minzoom: 3.2,
+      layout: {
+        "text-field": ["get", "name"],
+        "text-font": ["Noto Sans Italic"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 3.2, 9.5, 8, 12],
+        "text-max-width": 8,
+      },
+      paint: {
+        "text-color": "#991b1b",
+        "text-halo-color": "rgba(255,255,255,0.9)",
+        "text-halo-width": 1.4,
+      },
+    });
+  }
+
+  // Global oceans, countries, states, cities, towns & village labels (Apple Maps style hierarchy)
+  if (hasOpenMapTiles) {
+    const labelLayers = [
+      {
+        id: "water-ocean-labels",
+        type: "symbol",
+        "source-layer": "water_name",
+        minzoom: 1.5,
+        layout: {
+          "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]],
+          "text-font": ["Noto Sans Italic"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 1.5, 11, 5, 14],
+          "text-letter-spacing": 0.12,
+        },
+        paint: {
+          "text-color": "#6186a6",
+          "text-halo-color": "rgba(215, 236, 250, 0.8)",
+          "text-halo-width": 1.3,
+        },
+      },
+      {
+        id: "country-labels",
+        type: "symbol",
+        "source-layer": "place",
+        filter: ["==", ["get", "class"], "country"],
+        minzoom: 1.6,
+        maxzoom: 6.5,
+        layout: {
+          "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 1.6, 8.8, 3.8, 9.8, 6, 11.4],
+          "text-transform": "uppercase",
+          "text-letter-spacing": 0.16,
+          "text-padding": 10,
+        },
+        paint: {
+          "text-color": "#4f555c",
+          "text-halo-color": "rgba(255, 255, 255, 0.88)",
+          "text-halo-width": 1.4,
+        },
+      },
+      {
+        id: "state-labels",
+        type: "symbol",
+        "source-layer": "place",
+        filter: ["==", ["get", "class"], "state"],
+        minzoom: 4.2,
+        maxzoom: 8.5,
+        layout: {
+          "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 4.2, 9.0, 7, 11.2],
+          "text-transform": "uppercase",
+          "text-letter-spacing": 0.12,
+          "text-padding": 12,
+        },
+        paint: {
+          "text-color": "#737980",
+          "text-halo-color": "rgba(255, 255, 255, 0.88)",
+          "text-halo-width": 1.3,
+        },
+      },
+      {
+        id: "city-dots-tier1",
+        type: "circle",
+        "source-layer": "place",
+        filter: ["all", ["==", ["get", "class"], "city"], ["<=", ["coalesce", ["get", "rank"], 10], 4]],
+        minzoom: 3.4,
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 3.4, 1.8, 9, 2.8],
+          "circle-color": "#18191a",
+          "circle-stroke-width": 0,
+        },
+      },
+      {
+        id: "city-labels-tier1",
+        type: "symbol",
+        "source-layer": "place",
+        filter: ["all", ["==", ["get", "class"], "city"], ["<=", ["coalesce", ["get", "rank"], 10], 4]],
+        minzoom: 3.4,
+        layout: {
+          "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 3.4, 10.0, 8, 12.6, 12, 14.0],
+          "text-variable-anchor": ["left", "right", "top", "bottom"],
+          "text-radial-offset": 0.5,
+          "text-padding": 22,
+          "symbol-sort-key": ["coalesce", ["get", "rank"], 10],
+        },
+        paint: {
+          "text-color": "#34393e",
+          "text-halo-color": "rgba(255, 255, 255, 0.94)",
+          "text-halo-width": 1.8,
+        },
+      },
+      {
+        id: "city-dots-major",
+        type: "circle",
+        "source-layer": "place",
+        filter: ["all", ["==", ["get", "class"], "city"], [">", ["coalesce", ["get", "rank"], 10], 4], ["<=", ["coalesce", ["get", "rank"], 10], 8]],
+        minzoom: 5.5,
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 5.5, 1.6, 10, 2.5],
+          "circle-color": "#18191a",
+          "circle-stroke-width": 0,
+        },
+      },
+      {
+        id: "city-labels-major",
+        type: "symbol",
+        "source-layer": "place",
+        filter: ["all", ["==", ["get", "class"], "city"], [">", ["coalesce", ["get", "rank"], 10], 4], ["<=", ["coalesce", ["get", "rank"], 10], 8]],
+        minzoom: 5.5,
+        layout: {
+          "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 5.5, 9.8, 9, 12.0, 12, 13.2],
+          "text-variable-anchor": ["left", "right", "top", "bottom"],
+          "text-radial-offset": 0.45,
+          "text-padding": 16,
+          "symbol-sort-key": ["coalesce", ["get", "rank"], 10],
+        },
+        paint: {
+          "text-color": "#3e4348",
+          "text-halo-color": "rgba(255, 255, 255, 0.94)",
+          "text-halo-width": 1.8,
+        },
+      },
+      {
+        id: "city-labels-regional",
+        type: "symbol",
+        "source-layer": "place",
+        filter: ["all", ["==", ["get", "class"], "city"], [">", ["coalesce", ["get", "rank"], 10], 8]],
+        minzoom: 6.5,
+        layout: {
+          "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 6.5, 9.6, 11, 11.8],
+          "text-padding": 14,
+          "symbol-sort-key": ["coalesce", ["get", "rank"], 15],
+        },
+        paint: {
+          "text-color": "#4b5055",
+          "text-halo-color": "rgba(255, 255, 255, 0.92)",
+          "text-halo-width": 1.6,
+        },
+      },
+      {
+        id: "city-labels-towns",
+        type: "symbol",
+        "source-layer": "place",
+        filter: ["==", ["get", "class"], "town"],
+        minzoom: 8.2,
+        layout: {
+          "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]],
+          "text-font": ["Noto Sans Regular"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 8.2, 9.2, 13, 11.6],
+          "text-padding": 12,
+          "symbol-sort-key": ["coalesce", ["get", "rank"], 20],
+        },
+        paint: {
+          "text-color": "#555a60",
+          "text-halo-color": "rgba(255, 255, 255, 0.92)",
+          "text-halo-width": 1.5,
+        },
+      },
+      {
+        id: "city-labels-localities",
+        type: "symbol",
+        "source-layer": "place",
+        filter: ["match", ["get", "class"], ["village", "suburb", "quarter", "neighbourhood", "hamlet"], true, false],
+        minzoom: 10.6,
+        layout: {
+          "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]],
+          "text-font": ["Noto Sans Italic"],
+          "text-size": ["interpolate", ["linear"], ["zoom"], 10.6, 9.0, 14, 11.0],
+          "text-padding": 10,
+        },
+        paint: {
+          "text-color": "#636669",
+          "text-halo-color": "rgba(244, 243, 239, 0.9)",
+          "text-halo-width": 1.3,
+        },
+      },
+    ];
+    for (const def of labelLayers) {
+      if (!map.getLayer(def.id)) {
+        map.addLayer({ source: "openmaptiles", ...def });
+      }
+    }
   }
 
   if (state.indiaExtras?.prashad && !map.getSource("prashad-src")) {
@@ -1535,6 +2273,8 @@ function attachOverlayLayers() {
     map.addSource("monuments-vt", {
       type: "vector",
       url: `pmtiles://${absUrl}`,
+      minzoom: 0,
+      maxzoom: 8,
       promoteId: "qid",
     });
 
@@ -1548,10 +2288,11 @@ function attachOverlayLayers() {
           "interpolate",
           ["linear"],
           ["zoom"],
-          1, ["case", ["==", ["get", "un"], 1], 3.4, 2.1],
-          5, ["case", ["==", ["get", "un"], 1], 5.6, ["==", ["get", "mv"], 1], 5.0, 3.2],
-          10, ["case", ["==", ["get", "un"], 1], 8.0, 5.4],
-          15, ["case", ["==", ["get", "un"], 1], 10.0, 7.2],
+          1, 7.2,
+          4, 6.0,
+          8, 4.8,
+          12, 3.8,
+          16, 3.0,
         ],
         "circle-color": [
           "match",
@@ -1564,11 +2305,33 @@ function attachOverlayLayers() {
           "uncovered", SITE_COLORS.uncovered,
           SITE_COLORS.national,
         ],
-        "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 1, 0.4, 6, 1.1],
+        "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 1, 0.4, 8, 0.85],
         "circle-stroke-color": "#ffffff",
         "circle-opacity": 0.92,
       },
     });
+
+    // India-parity crisp canvas exclamation badge icon for poorly covered sites
+    if (typeof document !== "undefined" && map.addImage && !map.hasImage?.("uncovered-excl")) {
+      const sz = 28;
+      const cv = document.createElement("canvas");
+      cv.width = sz;
+      cv.height = sz;
+      const g = cv.getContext("2d");
+      g.beginPath();
+      g.arc(sz / 2, sz / 2, sz / 2 - 2.5, 0, Math.PI * 2);
+      g.fillStyle = "#ffffff";
+      g.fill();
+      g.lineWidth = 2.4;
+      g.strokeStyle = "#64748b";
+      g.stroke();
+      g.fillStyle = "#475569";
+      g.font = "900 17px Karla, -apple-system, BlinkMacSystemFont, sans-serif";
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      g.fillText("!", sz / 2, sz / 2 + 1);
+      map.addImage("uncovered-excl", g.getImageData(0, 0, sz, sz), { pixelRatio: 2 });
+    }
 
     map.addLayer({
       id: "monuments-uncovered-excl",
@@ -1576,32 +2339,55 @@ function attachOverlayLayers() {
       source: "monuments-vt",
       "source-layer": "monuments",
       filter: ["==", ["get", "uncov"], 1],
-      minzoom: 5,
+      minzoom: 5.2,
       layout: {
-        "text-field": "!",
-        "text-size": ["interpolate", ["linear"], ["zoom"], 5, 8.5, 12, 12],
-        "text-allow-overlap": true,
-        "text-ignore-placement": true,
-      },
-      paint: {
-        "text-color": "#ffffff",
-        "text-halo-color": SITE_COLORS.uncovered,
-        "text-halo-width": 0.8,
+        "icon-image": "uncovered-excl",
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 2.2, 0.52, 5.5, 0.62, 10, 0.78, 14, 0.92],
+        "icon-allow-overlap": false,
+        "icon-padding": 3,
       },
     });
   }
 
+  // Hover highlight halo ring (magnetic hover snap feedback matching India Atlas)
+  if (!map.getSource("hovered-site")) {
+    map.addSource("hovered-site", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+    map.addLayer({
+      id: "hovered-site-halo",
+      type: "circle",
+      source: "hovered-site",
+      paint: {
+        "circle-radius": 11,
+        "circle-color": "rgba(0, 122, 255, 0.14)",
+        "circle-stroke-width": 2,
+        "circle-stroke-color": "#007aff",
+      },
+    });
+  }
+
+  // Selected halo ring + crisp dot core matching India Atlas
   if (!map.getSource("selected-site")) {
     map.addSource("selected-site", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
     map.addLayer({
-      id: "monuments-selected-ring",
+      id: "selected-site-halo",
       type: "circle",
       source: "selected-site",
       paint: {
-        "circle-radius": 13,
-        "circle-color": "transparent",
-        "circle-stroke-width": 2.4,
+        "circle-radius": 14,
+        "circle-color": "rgba(24, 25, 26, 0.12)",
+        "circle-stroke-width": 2.2,
         "circle-stroke-color": "#18191a",
+      },
+    });
+    map.addLayer({
+      id: "selected-site-core",
+      type: "circle",
+      source: "selected-site",
+      paint: {
+        "circle-radius": 6,
+        "circle-color": "#18191a",
+        "circle-stroke-width": 2,
+        "circle-stroke-color": "#ffffff",
       },
     });
   }
@@ -1610,31 +2396,118 @@ function attachOverlayLayers() {
   applyFilters();
 }
 
+let mapInteractionsBound = false;
 function bindMapInteractions() {
-  map.on("mousemove", "monuments-circle", (ev) => {
-    const feat = ev.features?.[0];
-    if (!feat) return;
-    map.getCanvas().style.cursor = "pointer";
-    const p = normalizeTileProps(feat.properties);
-    const badge = p.unesco ? "UNESCO" : p.inRestoration ? "Conservation" : p.coverageStatus === "uncovered" ? "! Poorly Covered" : p.siteType;
-    showTooltip(
-      ev.point,
-      `<div style="font-weight:700; font-size:12.5px;">${escapeHtml(p.name)}</div>
-       <div style="font-size:11px; color:var(--muted); margin-top:2px;">${escapeHtml([p.country, badge].filter(Boolean).join(" · "))}</div>`
-    );
-  });
+  if (mapInteractionsBound) return;
+  mapInteractionsBound = true;
 
-  map.on("mouseleave", "monuments-circle", () => {
+  // Magnetic snap query: checks active visible dots and picks closest Euclidean hit
+  const findSnapFeature = (point) => {
+    const layers = ["prashad-points", "monuments-uncovered-excl", "monuments-circle"].filter((l) => map.getLayer(l));
+    if (!layers.length) return null;
+    for (const r of [14, 18]) {
+      const hits = map.queryRenderedFeatures(
+        [
+          [point.x - r, point.y - r],
+          [point.x + r, point.y + r],
+        ],
+        { layers }
+      );
+      if (hits.length) {
+        let best = null;
+        let bestDist = Infinity;
+        for (const f of hits) {
+          const coords = f.geometry?.coordinates;
+          if (!Array.isArray(coords) || coords.length < 2) continue;
+          const sp = map.project(coords);
+          const d = Math.hypot(sp.x - point.x, sp.y - point.y);
+          const layerBonus = f.layer.id === "prashad-points" ? -1.5 : 0;
+          if (d + layerBonus < bestDist) {
+            bestDist = d + layerBonus;
+            best = { feat: f, screenPoint: sp, coords: coords.slice(0, 2) };
+          }
+        }
+        if (best) return best;
+      }
+    }
+    return null;
+  };
+
+  let lastHoverKey = "";
+  const clearHover = () => {
     map.getCanvas().style.cursor = "";
     elTooltip.classList.add("hidden");
+    const src = map.getSource("hovered-site");
+    if (src && lastHoverKey) src.setData({ type: "FeatureCollection", features: [] });
+    lastHoverKey = "";
+  };
+
+  map.on("mousemove", (ev) => {
+    const hit = findSnapFeature(ev.point);
+    if (hit) {
+      map.getCanvas().style.cursor = "pointer";
+      const f = hit.feat;
+      const p = normalizeTileProps(f.properties);
+      const hoverKey = `${p.qid || p.name}:${hit.coords[0].toFixed(4)},${hit.coords[1].toFixed(4)}`;
+      if (hoverKey !== lastHoverKey) {
+        lastHoverKey = hoverKey;
+        const src = map.getSource("hovered-site");
+        if (src) {
+          src.setData({
+            type: "FeatureCollection",
+            features: [{ type: "Feature", geometry: { type: "Point", coordinates: hit.coords }, properties: {} }],
+          });
+        }
+      }
+      const badge =
+        p.unesco
+          ? "UNESCO World Heritage"
+          : p.inRestoration
+            ? "In Danger / Restoration"
+            : p.coverageStatus === "uncovered"
+              ? "! Poorly Covered"
+              : p.siteType;
+      const imgUrl = p.image || (f.properties && f.properties.imgU) || "";
+      const imgHtml = imgUrl ? `<img class="tooltip-img" src="${escapeHtml(imgUrl)}" alt="" loading="eager" />` : "";
+      showTooltip(
+        hit.screenPoint,
+        `${imgHtml}<div class="tooltip-title">${escapeHtml(p.name)}</div>
+         <div class="tooltip-meta">${escapeHtml([p.country || p.region, badge].filter(Boolean).join(" · "))}</div>`
+      );
+      return;
+    }
+
+    const src = map.getSource("hovered-site");
+    if (src && lastHoverKey) {
+      src.setData({ type: "FeatureCollection", features: [] });
+      lastHoverKey = "";
+    }
+
+    if (map.getLayer("contested-areas-fill")) {
+      const ctHits = map.queryRenderedFeatures(ev.point, { layers: ["contested-areas-fill"] });
+      if (ctHits.length) {
+        map.getCanvas().style.cursor = "help";
+        const cp = ctHits[0].properties || {};
+        showTooltip(
+          ev.point,
+          `<div class="tooltip-title" style="color:#991b1b;">Contested Territory: ${escapeHtml(cp.name)}</div>
+           <div class="tooltip-meta">${escapeHtml(cp.note || cp.admin || "Disputed sovereignty boundary")}</div>`
+        );
+        return;
+      }
+    }
+
+    clearHover();
   });
 
-  map.on("click", "monuments-circle", (ev) => {
-    const feat = ev.features?.[0];
-    if (!feat) return;
+  map.getCanvas().addEventListener("mouseleave", clearHover);
+
+  map.on("click", (ev) => {
+    const hit = findSnapFeature(ev.point);
+    if (!hit) return;
     elTooltip.classList.add("hidden");
-    const coords = feat.geometry.coordinates.slice(0, 2);
-    openMonumentFromCoords(feat.properties, coords);
+    // Open detail panel cleanly WITHOUT zooming/panning the map camera
+    openMonumentFromCoords(hit.feat.properties, hit.coords, false);
   });
 
   map.on("moveend", schedulePhotoPins);
@@ -1677,6 +2550,10 @@ async function selectCountryFilter(iso3) {
 
 function setActiveFilter(filterKey) {
   state.activeFilter = state.activeFilter === filterKey && filterKey !== "all" ? "all" : filterKey;
+  if (elToggleContested && filterKey === "contested") {
+    state.contestedOnly = state.activeFilter === "contested";
+    elToggleContested.checked = state.contestedOnly;
+  }
   document.querySelectorAll("#legend-bar .legend-btn").forEach((btn) => {
     const isAct = btn.dataset.legendFilter === state.activeFilter;
     btn.classList.toggle("active", isAct);
@@ -1771,7 +2648,7 @@ function renderSearchDropdown() {
       const target = hits[Number(btn.dataset.searchIdx)];
       if (!target) return;
       closeSearchDock(false);
-      openMonumentFromCoords(target, target.coords);
+      openMonumentFromCoords(target, target.coords, true);
     });
   });
 }
@@ -1828,7 +2705,7 @@ async function queryRemoteWikidataSearch(query) {
         const target = remoteHits[Number(btn.dataset.ridx)];
         if (!target) return;
         closeSearchDock(false);
-        openMonumentFromCoords(target, target.coords);
+        openMonumentFromCoords(target, target.coords, true);
       });
     });
   } catch {
@@ -1838,12 +2715,14 @@ async function queryRemoteWikidataSearch(query) {
 
 // ---------- Initialization & Controls ----------
 async function init() {
-  const [summary, countriesGeo, unescoWorld, searchTop, indiaExtras] = await preloadDataPromise;
+  const [summary, countriesGeo, unescoWorld, searchTop, contestedGeo, indiaExtras, riversGeo] = await preloadDataPromise;
   state.worldSummary = summary;
   state.countriesGeo = countriesGeo;
   state.unescoWorld = unescoWorld || {};
   state.searchTop = searchTop || [];
+  state.contestedGeo = contestedGeo;
   state.indiaExtras = indiaExtras;
+  state.riversGeo = riversGeo;
 
   elCountry.innerHTML =
     `<option value="">All Countries &amp; Territories (${summary.countriesCount})</option>` +
@@ -1871,9 +2750,28 @@ elTogglePhotos.addEventListener("change", () => {
 });
 elToggleCountryBorders.addEventListener("change", () => {
   state.showCountryBorders = elToggleCountryBorders.checked;
-  if (map.getLayer("countries-line")) {
-    map.setLayoutProperty("countries-line", "visibility", state.showCountryBorders ? "visible" : "none");
-  }
+  ["countries-line", "om-border-admin", "om-border-sub", "om-border-disputed"].forEach((id) => {
+    if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", state.showCountryBorders ? "visible" : "none");
+  });
+});
+if (elToggleContested) {
+  elToggleContested.addEventListener("change", () => {
+    state.contestedOnly = elToggleContested.checked;
+    applyFilters();
+  });
+}
+
+document.querySelectorAll("#timeline-bar .timeline-pill").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const era = btn.dataset.era || "all";
+    state.activeEra = state.activeEra === era && era !== "all" ? "all" : era;
+    document.querySelectorAll("#timeline-bar .timeline-pill").forEach((p) => {
+      const act = p.dataset.era === state.activeEra;
+      p.classList.toggle("active", act);
+      p.setAttribute("aria-pressed", String(act));
+    });
+    applyFilters();
+  });
 });
 
 document.querySelectorAll("#legend-bar .legend-btn").forEach((btn) => {
@@ -1910,10 +2808,12 @@ document.getElementById("reset-view-btn").addEventListener("click", () => {
 document.getElementById("collapse-sidebar-btn").addEventListener("click", () => {
   elLeftPanel.classList.add("collapsed");
   elReopenSidebar.classList.remove("hidden");
+  map.easeTo({ padding: getGlobePadding(), duration: 280 });
 });
 elReopenSidebar.addEventListener("click", () => {
   elLeftPanel.classList.remove("collapsed");
   elReopenSidebar.classList.add("hidden");
+  map.easeTo({ padding: getGlobePadding(), duration: 280 });
 });
 
 document.getElementById("close-drawer").addEventListener("click", closeDetailDrawer);
