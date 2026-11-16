@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Global Monument Atlas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Karla:ital,wght@0,400..800;1,400..700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="vendor/maplibre-gl.css?v=5.24.1" />
+  <link rel="stylesheet" href="styles.css?v=20261115v51" />
+</head>
+<body class="sidebar-collapsed">
+  <div id="map"></div>
+
+  <!-- Graceful Minimalist Center-of-Globe Loading Bar (fades out once globe + registry load) -->
+  <div class="atlas-boot-skeleton" id="atlas-boot-skeleton" role="status" aria-live="polite" aria-label="Loading atlas">
+    <div class="boot-globe-orb">
+      <div class="boot-globe-ring" aria-hidden="true"></div>
+      <div class="boot-globe-shimmer" aria-hidden="true"></div>
+      <div class="boot-center-loader">
+        <span class="boot-center-label" id="boot-center-label">Loading 117,533 sites…</span>
+        <div class="boot-bar-track" aria-hidden="true">
+          <div class="boot-bar-fill"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <button class="sidebar-reopen-btn" id="reopen-sidebar-btn" aria-label="Open atlas search and controls">
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
+    <span>Global Monument Atlas</span>
+  </button>
+
+  <!-- Top-Right Global Monument Search & About Dock -->
+  <header class="top-toolbar" id="top-toolbar" aria-label="Global monument search">
+    <div class="search-dock" id="search-dock">
+      <a href="./about.html" class="top-about-btn" id="about-page-link" title="Budgets, API directory, and how this was made">About</a>
+      <button
+        type="button"
+        class="search-icon-btn"
+        id="search-toggle-btn"
+        aria-label="Open global monument search (/)"
+        aria-expanded="false"
+        aria-controls="search-wrap"
+        title="Search monuments globally (/)"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="7.5"></circle>
+          <path d="M20 20l-4.2-4.2"></path>
+        </svg>
+      </button>
+
+      <div class="search-wrap hidden" id="search-wrap">
+        <div class="search-input-row">
+          <svg class="search-field-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7.5"></circle>
+            <path d="M20 20l-4.2-4.2"></path>
+          </svg>
+          <input
+            id="search-input"
+            type="search"
+            placeholder="Search built monument, city, or country (/)"
+            autocomplete="off"
+            aria-autocomplete="list"
+            aria-controls="search-dropdown"
+            aria-expanded="false"
+          />
+          <button type="button" class="mini-close search-close-btn" id="search-close-btn" aria-label="Close and clear search" title="Close search">✕</button>
+        </div>
+        <div class="search-dropdown hidden" id="search-dropdown" role="listbox"></div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Compact Top-Left Corner Control Card -->
+  <aside class="left-panel collapsed" id="left-panel" aria-label="Atlas info and filters">
+    <div class="left-panel-sticky">
+      <div class="brand-row">
+        <div class="title-stack">
+          <h1 class="brand-title" id="brand-title">Global Monument Atlas</h1>
+          <div class="brand-sub" id="visible-count"><span class="skeleton-line w-44" aria-label="Loading site count"></span></div>
+        </div>
+        <button class="mini-close panel-collapse-btn" id="collapse-sidebar-btn" title="Minimize controls" aria-label="Minimize controls">✕</button>
+      </div>
+      <p class="brand-desc">Tracing how historic architecture is protected, paid for, and documented across national registries.</p>
+
+      <div class="quick-bar-row">
+        <button type="button" class="text-btn" id="toggle-filters-btn" aria-expanded="false" aria-controls="filters-drawer">Filters ▾</button>
+      </div>
+    </div>
+
+    <div class="left-panel-body">
+      <div class="filters-drawer hidden" id="filters-drawer">
+        <details class="filter-group" open>
+          <summary>Country or Territory</summary>
+          <select id="country-select" aria-label="Filter by country or territory">
+            <option value="">All Countries &amp; Territories</option>
+          </select>
+        </details>
+
+        <details class="filter-group hidden" id="region-filter-group" open>
+          <summary>Region or State</summary>
+          <select id="region-select" aria-label="Filter by region or state">
+            <option value="">All Regions</option>
+          </select>
+        </details>
+
+        <details class="filter-group" open>
+          <summary>Historical Era (Timeline)</summary>
+          <select id="era-select" aria-label="Filter by historical construction era">
+            <option value="all">All Eras (Incl. Undated)</option>
+            <option value="anc">Ancient (&lt; 500 CE)</option>
+            <option value="med">Medieval (500–1499 CE)</option>
+            <option value="ear">Early Modern (1500–1799)</option>
+            <option value="mod">Modern (1800–Present)</option>
+            <option value="unk">Undated (Chronology Not Available)</option>
+          </select>
+        </details>
+
+        <details class="filter-group" open>
+          <summary>Recognition &amp; Stewardship</summary>
+          <select id="designation-select" aria-label="Filter by recognition or stewardship status">
+            <option value="all">All Sites</option>
+            <option value="unesco">UNESCO World Heritage</option>
+            <option value="danger">UNESCO World Heritage in Danger</option>
+            <option value="intl">Globally Recognized (10+ Languages)</option>
+            <option value="private">Private / Foundation Donors</option>
+          </select>
+        </details>
+
+        <div class="filter-toggle-card">
+          <div class="filter-toggle-copy">
+            <span class="filter-toggle-title">Country Borders Overlay</span>
+            <span class="filter-toggle-sub">High-contrast international &amp; disputed boundaries</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-country-borders" checked aria-label="Show country boundary overlay" />
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+
+        <div class="filter-toggle-card">
+          <div class="filter-toggle-copy">
+            <span class="filter-toggle-title">Contested Territories</span>
+            <span class="filter-toggle-sub">Isolate disputed regions &amp; monuments inside them</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="toggle-contested" aria-label="Filter contested territories" />
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+
+        <div class="secondary-actions">
+          <a href="./about.html#directory" class="text-btn" title="Full directory of APIs, statutory registers &amp; public budgets across 195 countries + 37 territories">Country APIs &amp; Budgets ↗</a>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Horizontal Evidence Legend + Multi-Select AND Layering -->
+  <div class="legend-bar scrolled-start is-boot-loading" id="legend-bar-wrap">
+    <button type="button" class="legend-scroll-hint legend-scroll-left" id="legend-scroll-left" aria-label="Scroll categories left" title="Scroll back"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg></button>
+    <div class="legend-track" id="legend-bar" role="group" aria-label="Combine categories to filter monuments (multi-select AND)">
+      <button type="button" class="legend-btn active" data-legend-filter="all" aria-pressed="true">
+        <span class="legend-btn-name">All</span>
+      </button>
+      <button type="button" class="legend-btn" data-legend-filter="fundingdoc" aria-pressed="false">
+        <span class="legend-btn-name"><i class="dot dot-fundingdoc"></i>Published Funding</span>
+      </button>
+      <button type="button" class="legend-btn" data-legend-filter="visitordoc" aria-pressed="false">
+        <span class="legend-btn-name"><i class="dot dot-visitordoc"></i>Visitor Logs</span>
+      </button>
+      <button type="button" class="legend-btn" data-legend-filter="foreignaid" aria-pressed="false">
+        <span class="legend-btn-name"><i class="dot dot-foreignaid"></i>Foreign Aid</span>
+      </button>
+      <button type="button" class="legend-btn" data-legend-filter="wikidoc" aria-pressed="false">
+        <span class="legend-btn-name"><i class="dot dot-wikidoc"></i>Wikipedia Entry</span>
+      </button>
+      <button type="button" class="legend-btn" data-legend-filter="nophoto" aria-pressed="false">
+        <span class="legend-btn-name"><i class="dot dot-nophoto"></i>Missing Photo</span>
+      </button>
+    </div>
+    <button type="button" class="legend-scroll-hint" id="legend-scroll-hint" aria-label="Scroll more categories" title="Scroll categories"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg></button>
+  </div>
+
+  <!-- Map-Level Nearby Monument Navigation Arrows -->
+  <div class="map-nearby-nav hidden" id="map-nearby-nav" aria-label="Navigate nearby monuments"></div>
+
+  <!-- Spacious Right-Side Monument Inspector Card -->
+  <aside class="detail-drawer hidden" id="detail-drawer" aria-live="polite">
+    <button class="close-btn" id="close-drawer" aria-label="Close details">✕</button>
+    <div id="detail-content"></div>
+  </aside>
+
+  <!-- Minimal hover preview card with thumbnail -->
+  <div class="map-tooltip hidden" id="tooltip"></div>
+
+  <script src="vendor/maplibre-gl.js?v=5.24.1"></script>
+  <script src="vendor/pmtiles.js"></script>
+  <script src="app.js?v=20261115v51"></script>
+</body>
+</html>
