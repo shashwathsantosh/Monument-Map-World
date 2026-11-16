@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>About | Global Monument Atlas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+      --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --bg: #ffffff;
+      --surface-subtle: #ffffff;
+      --ink: #1e293b;
+      --ink-strong: #0f172a;
+      --ink-secondary: #475569;
+      --ink-tertiary: #64748b;
+      --hairline: rgba(15, 23, 42, 0.08);
+      --hairline-strong: rgba(15, 23, 42, 0.14);
+      --blue: #0b5fd6;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      background-color: var(--bg);
+      color: var(--ink);
+      font-family: var(--font-sans);
+      font-size: 15px;
+      line-height: 1.62;
+      letter-spacing: -0.008em;
+      font-variant-numeric: tabular-nums;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+
+    /* Clean Document Canvas */
+    .page {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 32px 24px 84px;
+    }
+
+    /* Minimal Top Back Link */
+    .back-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 36px;
+    }
+
+    .nav-back {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 550;
+      color: var(--ink-secondary);
+      padding: 5px 10px 5px 7px;
+      margin-left: -7px;
+      border-radius: 6px;
+      background: transparent;
+      transition: background 0.14s ease, color 0.14s ease;
+    }
+    .nav-back:hover {
+      background: rgba(55, 53, 47, 0.06);
+      color: var(--ink-strong);
+      text-decoration: none;
+    }
+
+    .page-badge {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--ink-tertiary);
+    }
+
+    .live-dot {
+      width: 6.5px;
+      height: 6.5px;
+      border-radius: 50%;
+      background: #16a34a;
+      display: inline-block;
+      flex-shrink: 0;
+      box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.55);
+      animation: liveTick 2s ease-out infinite;
+    }
+
+    @keyframes liveTick {
+      0% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.55); }
+      70% { box-shadow: 0 0 0 5px rgba(22, 163, 74, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); }
+    }
+
+    /* Document Header (Direct on Page, Notion-style) */
+    .doc-header {
+      padding-bottom: 26px;
+      border-bottom: 1px solid var(--hairline);
+      margin-bottom: 28px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 11.5px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #15803d;
+      margin-bottom: 10px;
+    }
+
+    .doc-header h1 {
+      margin: 0 0 18px;
+      font-size: clamp(25px, 3.4vw, 32px);
+      font-weight: 700;
+      line-height: 1.2;
+      letter-spacing: -0.026em;
+      color: var(--ink-strong);
+      max-width: 100%;
+      text-wrap: balance;
+    }
+
+    .doc-lead {
+      margin: 0 0 18px;
+      max-width: 720px;
+      font-size: 15.5px;
+      line-height: 1.62;
+      color: var(--ink-secondary);
+    }
+
+    .doc-stats-line {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 14px;
+      line-height: 1.45;
+      color: var(--ink-tertiary);
+    }
+    .doc-stats-line strong {
+      color: var(--ink-strong);
+      font-weight: 650;
+    }
+
+    /* Plain Document Sections */
+    .section-block {
+      margin-bottom: 34px;
+    }
+
+    .section-divider {
+      padding-bottom: 28px;
+      border-bottom: 1px solid var(--hairline);
+    }
+
+    .section-head {
+      margin-bottom: 12px;
+    }
+
+    .section-head h2 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      line-height: 1.3;
+      color: var(--ink-strong);
+    }
+
+    .section-head p {
+      margin: 4px 0 0;
+      font-size: 13.5px;
+      color: var(--ink-tertiary);
+    }
+
+    /* Plain Document Prose */
+    .doc-prose {
+      margin: 0;
+      font-size: 14.5px;
+      line-height: 1.7;
+      color: var(--ink-secondary);
+      max-width: 780px;
+    }
+
+    .doc-prose code {
+      font-family: var(--font-mono);
+      font-size: 12.2px;
+      color: #eb5757;
+      background: rgba(135, 131, 120, 0.12);
+      padding: 1.5px 5.5px;
+      border-radius: 4px;
+    }
+
+    /* Clean Embedded Database Table (Notion Database Block Style) */
+    .directory-shell {
+      background: var(--bg);
+      border-radius: 10px;
+      border: 1px solid var(--hairline-strong);
+      padding: 18px 22px;
+      overflow: hidden;
+    }
+
+    .directory-toolbar {
+      padding: 4px 6px 16px;
+      border-bottom: 1px solid var(--hairline);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background: transparent;
+    }
+
+    .toolbar-row-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex: 1;
+      justify-content: flex-end;
+      min-width: 240px;
+    }
+
+    /* Filter Tabs */
+    .segmented {
+      display: inline-flex;
+      gap: 4px;
+    }
+
+    .seg-btn {
+      border: none;
+      background: transparent;
+      color: var(--ink-tertiary);
+      font-family: inherit;
+      font-size: 12.5px;
+      font-weight: 550;
+      padding: 4.5px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.12s ease, color 0.12s ease;
+      white-space: nowrap;
+    }
+    .seg-btn:hover {
+      background: rgba(55, 53, 47, 0.06);
+      color: var(--ink-strong);
+    }
+    .seg-btn.active {
+      background: rgba(55, 53, 47, 0.09);
+      color: var(--ink-strong);
+      font-weight: 600;
+    }
+
+    /* Search Input */
+    .search-field-wrap {
+      position: relative;
+      flex: 1;
+      min-width: 210px;
+      max-width: 300px;
+    }
+
+    .search-field-wrap svg {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--ink-tertiary);
+      pointer-events: none;
+    }
+
+    .search-input {
+      width: 100%;
+      height: 31px;
+      padding: 0 10px 0 30px;
+      border-radius: 6px;
+      border: 1px solid var(--hairline-strong);
+      background: var(--bg);
+      font-family: inherit;
+      font-size: 12.5px;
+      color: var(--ink-strong);
+      outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .search-input:focus {
+      border-color: rgba(11, 95, 214, 0.65);
+      box-shadow: 0 0 0 2.5px rgba(11, 95, 214, 0.12);
+    }
+
+    .directory-meta {
+      font-size: 11.5px;
+      font-weight: 500;
+      color: var(--ink-tertiary);
+      white-space: nowrap;
+    }
+
+    /* Taller Data Table Container with Always-Visible Scrollbar */
+    .table-scroll {
+      max-height: 760px;
+      overflow-y: scroll;
+      overflow-x: auto;
+      scrollbar-gutter: stable;
+      overscroll-behavior: contain;
+    }
+
+    .table-scroll::-webkit-scrollbar {
+      width: 11px;
+      height: 10px;
+    }
+    .table-scroll::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.045);
+      border-radius: 999px;
+    }
+    .table-scroll::-webkit-scrollbar-thumb {
+      background: rgba(15, 23, 42, 0.28);
+      border-radius: 999px;
+      border: 2.5px solid transparent;
+      background-clip: content-box;
+    }
+    .table-scroll::-webkit-scrollbar-thumb:hover {
+      background: rgba(15, 23, 42, 0.45);
+      border: 2.5px solid transparent;
+      background-clip: content-box;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 12.75px;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      padding: 12px 16px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--ink-tertiary);
+      background: var(--bg);
+      border-bottom: 1px solid var(--hairline-strong);
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    thead th[data-sort] {
+      cursor: pointer;
+      transition: color 0.12s ease, background 0.12s ease;
+    }
+    thead th[data-sort]:hover {
+      color: var(--ink-strong);
+      background: #f3f3f1;
+    }
+    thead th[data-sort].is-sorted {
+      color: var(--ink-strong);
+    }
+    thead th .sort-ind {
+      display: inline-block;
+      margin-left: 3px;
+      font-size: 10px;
+      opacity: 0.6;
+    }
+    thead th.is-sorted .sort-ind {
+      opacity: 1;
+      color: var(--blue);
+    }
+
+    tbody tr {
+      border-bottom: 1px solid var(--hairline);
+      transition: background 0.1s ease;
+    }
+    tbody tr:last-child {
+      border-bottom: none;
+    }
+    tbody tr:hover {
+      background: rgba(55, 53, 47, 0.03);
+    }
+
+    #country-tbody td {
+      padding: 16px 16px;
+      vertical-align: top;
+    }
+
+    td:first-child {
+      min-width: 165px;
+      max-width: 210px;
+    }
+
+    .c-name-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--ink-strong);
+    }
+    .c-name-row a {
+      color: var(--ink-strong);
+    }
+    .c-name-row a:hover {
+      color: var(--blue);
+    }
+
+    .iso-badge {
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      font-weight: 600;
+      color: var(--ink-tertiary);
+      background: rgba(55, 53, 47, 0.07);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+
+    .c-sub {
+      font-size: 11px;
+      color: var(--ink-tertiary);
+      margin-top: 2px;
+      line-height: 1.38;
+    }
+
+    .sites-num {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ink-strong);
+    }
+
+    /* Tag Chips (Notion Multi-Select Pill Feel) */
+    .source-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      max-width: 230px;
+    }
+
+    .s-pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 10.5px;
+      font-weight: 550;
+      background: rgba(55, 53, 47, 0.07);
+      color: var(--ink-secondary);
+      white-space: nowrap;
+      transition: background 0.12s ease;
+    }
+    a.s-pill:hover {
+      background: rgba(55, 53, 47, 0.13);
+      text-decoration: none;
+    }
+    .s-pill.is-reg {
+      background: rgba(35, 131, 226, 0.12);
+      color: #1558a8;
+    }
+    .s-pill.is-grant {
+      background: rgba(144, 101, 176, 0.13);
+      color: #6940a5;
+    }
+    .s-pill.is-budget {
+      background: rgba(68, 131, 97, 0.14);
+      color: #2c6e49;
+    }
+
+    .budget-figure {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ink-strong);
+    }
+
+    .budget-fy {
+      font-size: 10.5px;
+      color: var(--ink-tertiary);
+      margin-left: 4px;
+    }
+
+    .na-pill {
+      display: inline-flex;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 10.5px;
+      font-weight: 550;
+      color: var(--ink-tertiary);
+      background: rgba(55, 53, 47, 0.06);
+      white-space: nowrap;
+    }
+
+    @keyframes skelShimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .skel-bar {
+      display: inline-block;
+      height: 12px;
+      border-radius: 5px;
+      background: linear-gradient(90deg, rgba(15, 23, 42, 0.06) 25%, rgba(15, 23, 42, 0.12) 50%, rgba(15, 23, 42, 0.06) 75%);
+      background-size: 200% 100%;
+      animation: skelShimmer 1.35s ease-in-out infinite;
+    }
+
+    @media (max-width: 720px) {
+      .page {
+        padding: 18px 16px 56px;
+      }
+      .segmented {
+        width: 100%;
+        overflow-x: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="back-row">
+      <a class="nav-back" href="./index.html">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13L5 8l5-5"/></svg>
+        <span>Global Monument Atlas</span>
+      </a>
+    </div>
+
+    <!-- Clean Notion-Style Header -->
+    <header class="doc-header" id="mission">
+      <h1>Tracking the public budgets, visitor records, and documentation behind government recognized architectural monuments&nbsp;worldwide.</h1>
+      <div class="doc-stats-line" aria-label="Dataset overview">
+        <span><strong id="stat-sites-count">117,533</strong> sites</span>
+        <span><strong>195</strong> countries &amp; <strong>37</strong> territories</span>
+        <span><strong id="stat-apis-count">322</strong> public APIs &amp; registers</span>
+        <span><strong>209</strong> published budgets</span>
+      </div>
+    </header>
+
+    <!-- Methodology (Plain English Section) -->
+    <section class="section-block section-divider" id="architecture">
+      <div class="section-head">
+        <h2>Methodology</h2>
+      </div>
+      <p class="doc-prose">
+        This atlas brings together public records for government recognized architectural monuments worldwide. National monument lists are cross-checked against public encyclopedias, international registries, and official government budget documents to show how monuments are funded and maintained. Natural parks, peaks, and landforms are removed so the atlas focuses only on architectural monuments, and undisclosed budgets or visitor figures are always left unreported rather than estimated.
+      </p>
+    </section>
+
+    <!-- API Directory Table -->
+    <section class="section-block" id="directory">
+      <div class="section-head">
+        <h2>API Directory</h2>
+        <p>Every record on the atlas is pulled directly from these public APIs and official registers.</p>
+      </div>
+
+      <div class="directory-shell">
+        <div class="directory-toolbar">
+          <div class="toolbar-row-top">
+            <div class="segmented" role="tablist" aria-label="Jurisdiction scope">
+              <button type="button" class="seg-btn active" data-scope="sovereign" id="seg-sovereign">Sovereign (195)</button>
+              <button type="button" class="seg-btn" data-scope="territories" id="seg-territories">Territories (37)</button>
+              <button type="button" class="seg-btn" data-scope="all" id="seg-all">All (232)</button>
+            </div>
+            <div class="toolbar-right">
+              <div class="directory-meta" id="table-summary-sub">195 countries</div>
+              <div class="search-field-wrap">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7.5"/><path d="M20 20l-4.2-4.2"/></svg>
+                <input type="search" id="country-search" class="search-input" placeholder="Filter country, continent, or API…" aria-label="Search countries, continents, and APIs" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-scroll">
+          <table aria-label="Countries, upstream APIs, and public heritage budgets">
+            <thead>
+              <tr>
+                <th data-sort="name">Country <span class="sort-ind" aria-hidden="true">↕</span></th>
+                <th data-sort="monuments">Sites <span class="sort-ind" aria-hidden="true">↕</span></th>
+                <th>APIs Pulled</th>
+                <th data-sort="budgetUsd" class="is-sorted">Budget <span class="sort-ind" aria-hidden="true">↓</span></th>
+              </tr>
+            </thead>
+            <tbody id="country-tbody">
+              <tr aria-hidden="true"><td><span class="skel-bar" style="width:110px"></span></td><td><span class="skel-bar" style="width:46px"></span></td><td><span class="skel-bar" style="width:165px"></span></td><td><span class="skel-bar" style="width:74px"></span></td></tr>
+              <tr aria-hidden="true"><td><span class="skel-bar" style="width:130px"></span></td><td><span class="skel-bar" style="width:40px"></span></td><td><span class="skel-bar" style="width:150px"></span></td><td><span class="skel-bar" style="width:78px"></span></td></tr>
+              <tr aria-hidden="true"><td><span class="skel-bar" style="width:98px"></span></td><td><span class="skel-bar" style="width:44px"></span></td><td><span class="skel-bar" style="width:180px"></span></td><td><span class="skel-bar" style="width:70px"></span></td></tr>
+              <tr aria-hidden="true"><td><span class="skel-bar" style="width:116px"></span></td><td><span class="skel-bar" style="width:48px"></span></td><td><span class="skel-bar" style="width:155px"></span></td><td><span class="skel-bar" style="width:72px"></span></td></tr>
+              <tr aria-hidden="true"><td><span class="skel-bar" style="width:104px"></span></td><td><span class="skel-bar" style="width:42px"></span></td><td><span class="skel-bar" style="width:160px"></span></td><td><span class="skel-bar" style="width:68px"></span></td></tr>
+              <tr aria-hidden="true"><td><span class="skel-bar" style="width:124px"></span></td><td><span class="skel-bar" style="width:52px"></span></td><td><span class="skel-bar" style="width:145px"></span></td><td><span class="skel-bar" style="width:74px"></span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const ISO3_TO_ISO2 = {
+      GBR:"GB",USA:"US",FRA:"FR",DEU:"DE",ESP:"ES",ITA:"IT",RUS:"RU",IND:"IN",POL:"PL",NLD:"NL",CZE:"CZ",BRA:"BR",NOR:"NO",AUT:"AT",UKR:"UA",JPN:"JP",SWE:"SE",PRT:"PT",CHE:"CH",ROU:"RO",IRN:"IR",BEL:"BE",CHN:"CN",SRB:"RS",FIN:"FI",GRC:"GR",CAN:"CA",BLR:"BY",TUR:"TR",AUS:"AU",MDA:"MD",ARG:"AR",SVK:"SK",NGA:"NG",DNK:"DK",BGR:"BG",IDN:"ID",MEX:"MX",ALB:"AL",AZE:"AZ",SVN:"SI",HUN:"HU",HKG:"HK",LUX:"LU",THA:"TH",EGY:"EG",DZA:"DZ",MYS:"MY",MKD:"MK",SYR:"SY",SAU:"SA",PRI:"PR",YEM:"YE",ZAF:"ZA",LTU:"LT",HRV:"HR",ARM:"AM",PER:"PE",MLT:"MT",BIH:"BA",LVA:"LV",EST:"EE",IRL:"IE",IMN:"IM",TUN:"TN",UZB:"UZ",LBY:"LY",KOR:"KR",ALA:"AX",IRQ:"IQ",NZL:"NZ",BGD:"BD",PAK:"PK",TWN:"TW",URY:"UY",COL:"CO",PHL:"PH",SUR:"SR",VNM:"VN",CHL:"CL",ISR:"IL",PSE:"PS",LKA:"LK",ETH:"ET",GEO:"GE",LBN:"LB",MAR:"MA",PAN:"PA",VEN:"VE",CYP:"CY",ARE:"AE",SGP:"SG",UGA:"UG",MOZ:"MZ",JOR:"JO",KAZ:"KZ",CUB:"CU",MMR:"MM",KHM:"KH",BOL:"BO",NAM:"NA",GHA:"GH",AND:"AD",KOS:"XK",ISL:"IS",GTM:"GT",PYF:"PF",MNE:"ME",PRK:"KP",AFG:"AF",MAC:"MO",VIR:"VI",AGO:"AO",SDN:"SD",TZA:"TZ",ECU:"EC",FRO:"FO",KEN:"KE",CPV:"CV",MDG:"MG",NPL:"NP",GGY:"GG",BHR:"BH",OMN:"OM",CMR:"CM",BEN:"BJ",SLV:"SV",NER:"NE",TLS:"TL",NCL:"NC",TKM:"TM",SEN:"SN",ABW:"AW",BLZ:"BZ",LIE:"LI",GUM:"GU",MNG:"MN",MLI:"ML",GNB:"GW",FJI:"FJ",BRN:"BN",BFA:"BF",NIC:"NI",BHS:"BS",BMU:"BM",ERI:"ER",JEY:"JE",LAO:"LA",RWA:"RW",CUW:"CW",HTI:"HT",VAT:"VA",CRI:"CR",CIV:"CI",TJK:"TJ",HND:"HN",DOM:"DO",TTO:"TT",GMB:"GM",JAM:"JM",STP:"ST",KGZ:"KG",FSM:"FM",TGO:"TG",MDV:"MV",MRT:"MR",KWT:"KW",PRY:"PY",BRB:"BB",TCD:"TD",GRL:"GL",QAT:"QA",MUS:"MU",MCO:"MC",DJI:"DJ",MNP:"MP",SMR:"SM",BTN:"BT",COD:"CD",GUY:"GY",SOM:"SO",ZMB:"ZM",BWA:"BW",SYC:"SC",KNA:"KN",ZWE:"ZW",ASM:"AS",ATG:"AG",VGB:"VG",SHN:"SH",SLE:"SL",PNG:"PG",BDI:"BI",GIN:"GN",MWI:"MW",PLW:"PW",SPM:"PM",WLF:"WF",GAB:"GA",SWZ:"SZ",BLM:"BL",TON:"TO",MAF:"MF",SXM:"SX",GRD:"GD",LSO:"LS",COG:"CG",CYM:"KY",DMA:"DM",FLK:"FK",MHL:"MH",CAF:"CF",COM:"KM",LBR:"LR",VUT:"VU",KIR:"KI",LCA:"LC",TCA:"TC",AIA:"AI",SLB:"SB",COK:"CK",GNQ:"GQ",VCT:"VC",WSM:"WS",SSD:"SS",MSR:"MS",NRU:"NR",TUV:"TV",ESH:"EH",NIU:"NU"
+    };
+    const flagForIso3 = (iso3) => {
+      const code = ISO3_TO_ISO2[String(iso3 || "").toUpperCase()];
+      if (!code || code.length !== 2) return "🏳️";
+      return String.fromCodePoint(...code.split("").map((c) => 127397 + c.charCodeAt(0)));
+    };
+    const esc = (s) => String(s ?? "").replace(/\s*\u2014\s*/g, " - ").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const fmtUsd = (n) => {
+      if (n === null || n === undefined || Number.isNaN(Number(n))) return null;
+      const v = Number(n);
+      if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
+      if (v >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
+      if (v >= 1e3) return `$${Math.round(v / 1e3).toLocaleString()}K`;
+      return `$${v.toLocaleString()}`;
+    };
+
+    let allRows = [];
+    let scopeMode = "sovereign";
+    let sortKey = "budgetUsd";
+    let sortAsc = false;
+
+    function updateSortHeaders() {
+      document.querySelectorAll("thead th[data-sort]").forEach((th) => {
+        const isCurrent = th.dataset.sort === sortKey;
+        th.classList.toggle("is-sorted", isCurrent);
+        const ind = th.querySelector(".sort-ind");
+        if (ind) {
+          ind.textContent = isCurrent ? (sortAsc ? "↑" : "↓") : "↕";
+        }
+      });
+    }
+
+    function pillClassForKind(kind = "") {
+      if (/Registry|Statutory/i.test(kind)) return "is-reg";
+      if (/Grant/i.test(kind)) return "is-grant";
+      if (/Budget/i.test(kind)) return "is-budget";
+      return "";
+    }
+
+    const CONTINENT_NAMES = new Set(["africa", "asia", "europe", "north america", "oceania", "south america"]);
+
+    function renderRows() {
+      const q = document.getElementById("country-search").value.trim().toLowerCase();
+      const isExactContinent = CONTINENT_NAMES.has(q);
+      const scoped = allRows.filter((r) => {
+        if (scopeMode === "sovereign" && r.isSovereign === false) return false;
+        if (scopeMode === "territories" && r.isSovereign !== false) return false;
+        if (!q) return true;
+        if (isExactContinent) return (r.continent || "").toLowerCase() === q;
+        const hay = [
+          r.name, r.iso3, r.continent, r.polityStatus, r.budgetAgency,
+          ...(r.apis || []).map((a) => `${a.name} ${a.shortLabel || ""} ${a.kind}`)
+        ].join(" ").toLowerCase();
+        return hay.includes(q);
+      });
+
+      scoped.sort((a, b) => {
+        if (sortKey === "name") {
+          return sortAsc ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
+        }
+        const av = a[sortKey] === null || a[sortKey] === undefined ? null : Number(a[sortKey]);
+        const bv = b[sortKey] === null || b[sortKey] === undefined ? null : Number(b[sortKey]);
+        if (av === null && bv === null) return (b.monuments || 0) - (a.monuments || 0);
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        if (av === bv) return (b.monuments || 0) - (a.monuments || 0);
+        return sortAsc ? av - bv : bv - av;
+      });
+
+      updateSortHeaders();
+      document.getElementById("table-summary-sub").textContent =
+        `${scoped.length} ${scopeMode === "sovereign" ? "countries" : scopeMode === "territories" ? "territories" : "jurisdictions"}`;
+
+      const tbody = document.getElementById("country-tbody");
+      tbody.innerHTML = scoped.map((r) => {
+        const bStr = fmtUsd(r.budgetUsd);
+        const budgetHtml = bStr
+          ? `<div><span class="budget-figure">${esc(bStr)}</span><span class="budget-fy">${esc(r.budgetFy || "")}</span></div>
+             <div class="c-sub">${r.budgetSourceUrl ? `<a href="${esc(r.budgetSourceUrl)}" target="_blank" rel="noopener">${esc(r.budgetAgency || "Report")} ↗</a>` : esc(r.budgetAgency || "")}</div>`
+          : `<span class="na-pill">Not Available</span>`;
+
+        const seenLabels = new Set();
+        const dedupedApis = [];
+        for (const a of r.apis || []) {
+          const lbl = a.shortLabel || a.kind || "Source";
+          if (seenLabels.has(lbl)) continue;
+          seenLabels.add(lbl);
+          dedupedApis.push({ ...a, lbl });
+        }
+
+        const pillsHtml = dedupedApis.map((a) => {
+          const cls = pillClassForKind(a.kind);
+          const tip = `${a.name}${a.records ? ` (${Number(a.records).toLocaleString()} records)` : ""}`;
+          return a.url
+            ? `<a class="s-pill ${cls}" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(tip)}">${esc(a.lbl)} ↗</a>`
+            : `<span class="s-pill ${cls}" title="${esc(tip)}">${esc(a.lbl)}</span>`;
+        }).join("");
+
+        const subGeo = r.isSovereign === false
+          ? `${r.polityStatus || "Territory"} · ${r.continent || ""}`
+          : (r.continent || "Global");
+
+        return `
+          <tr>
+            <td>
+              <div class="c-name-row">
+                <span aria-hidden="true">${flagForIso3(r.iso3)}</span>
+                <a href="./index.html?country=${encodeURIComponent(r.iso3)}" title="Open ${esc(r.name)} on the live atlas">${esc(r.name)}</a>
+                <span class="iso-badge">${esc(r.iso3)}</span>
+              </div>
+              <div class="c-sub">${esc(subGeo)}</div>
+            </td>
+            <td>
+              <div class="sites-num">${Number(r.monuments || 0).toLocaleString()}</div>
+              <div class="c-sub">${esc(r.photographedPct)}% photo</div>
+            </td>
+            <td>
+              <div class="source-pills">${pillsHtml}</div>
+            </td>
+            <td>
+              ${budgetHtml}
+              <div class="c-sub">${r.siteBudgetsDisclosed || 0} site budgets</div>
+            </td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    fetch("data/country-sources.json?v=20261115v48")
+      .then((r) => r.json())
+      .then((data) => {
+        allRows = data.countries || [];
+        const statSitesEl = document.getElementById("stat-sites-count");
+        if (statSitesEl && data.totalMonuments) statSitesEl.textContent = Number(data.totalMonuments).toLocaleString();
+        const uniqueApiUrls = new Set(allRows.flatMap((r) => (r.apis || []).filter((a) => a.url).map((a) => a.url)));
+        const statApisEl = document.getElementById("stat-apis-count");
+        if (statApisEl && uniqueApiUrls.size) statApisEl.textContent = uniqueApiUrls.size.toLocaleString();
+        const sov = data.sovereignCountriesCount || allRows.filter((r) => r.isSovereign !== false).length;
+        const ter = data.territoriesCount || allRows.filter((r) => r.isSovereign === false).length;
+
+        document.getElementById("seg-sovereign").textContent = `Sovereign (${sov})`;
+        document.getElementById("seg-territories").textContent = `Territories (${ter})`;
+        document.getElementById("seg-all").textContent = `All (${allRows.length})`;
+
+        document.querySelectorAll("[data-scope]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            scopeMode = btn.dataset.scope;
+            document.querySelectorAll("[data-scope]").forEach((b) => b.classList.toggle("active", b === btn));
+            renderRows();
+          });
+        });
+
+        document.getElementById("country-search").addEventListener("input", renderRows);
+        document.querySelectorAll("thead th[data-sort]").forEach((th) => {
+          th.addEventListener("click", () => {
+            const k = th.dataset.sort;
+            if (sortKey === k) sortAsc = !sortAsc;
+            else {
+              sortKey = k;
+              sortAsc = k === "name";
+            }
+            renderRows();
+          });
+        });
+
+        renderRows();
+      });
+  </script>
+</body>
+</html>

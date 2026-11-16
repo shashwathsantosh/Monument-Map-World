@@ -1,19 +1,21 @@
-# Architecture Monument Atlas
+# Global Monument Atlas
 
-A global, light-mode interactive architectural monument, chronology, and conservation atlas powered by **PMTiles** vector tiles, country-sharded metadata, and live Wikidata / Wikipedia / UNESCO enrichment across every country in the world.
+A light-mode interactive atlas of built architectural monuments, chronological eras, statutory heritage registries, and conservation economics across every sovereign state and territory worldwide.
 
-Kept intentionally separate from the India-focused [Monument-Map](https://github.com/shashwathsantosh/Monument-Map) repository while preserving all India ASI/PRASHAD records inside India's country dataset.
+Kept in its own standalone repository (`Monument-Map-World`), separate from the India-focused [Monument-Map](https://github.com/shashwathsantosh/Monument-Map) repository, while preserving India's records within India's country shard.
 
-## Architecture (Long-Term Global Scale)
-- **PMTiles Vector Tiles (`public/data/monuments.pmtiles`):** Streams zoom-tiered architectural monument vector tiles (`z0–z8`, auto-overzoomed to `z20`) over HTTP Byte-Range requests (`pmtiles` protocol in MapLibre GL JS). Works on GitHub Pages today and scales seamlessly to millions of points on Cloudflare R2/S3 by changing `PMTILES_URL` in `public/app.js`.
-- **Global Chronological Timeline:** Filter architectural structures worldwide across Ancient (`< 500 CE`), Medieval (`500–1499`), Early Modern (`1500–1799`), and Modern (`1800+`) eras directly on the vector map.
-- **UNESCO World Heritage (`public/data/unesco-world.json`):** Full built & mixed `whc001` catalog (inscribed year, criteria, justification, area, category, and In Danger conservation alerts).
-- **Contested Territories & Country Shards (`public/data/contested-areas.geojson`, `public/data/countries/<ISO3>.json`):** Highlights disputed territories and loads per-country architectural records on demand.
+## Dataset & Architecture
+- **117,533 Built Sites** across **195 sovereign countries & 37 territories**, filtered to human-built monuments and structures.
+- **PMTiles Vector Tiles (`public/data/monuments.pmtiles`):** Streams zoom-tiered monument vector tiles (`z0-z8`, auto-overzoomed to `z20`) over HTTP Byte-Range requests (`pmtiles` protocol in MapLibre GL JS).
+- **Country Shards & Search Index (`public/data/countries/<ISO3>.json`, `public/data/search-top.json`):** Per-country metadata shards loaded on demand alongside lightweight global search autocomplete.
+- **Public Registers & Heritage Budgets (`public/data/country-sources.json`, `public/data/global-funding.json`, `public/about.html`):** Tracks **322** public APIs & statutory registries and **209** published public heritage budgets with sortable country tables.
+- **UNESCO World Heritage (`public/data/unesco-world.json`):** Built and mixed `whc001` catalog with inscription details and In Danger indicators.
 
-## Rebuild Global Data & PMTiles
+## Rebuild Data & PMTiles
 ```bash
 npm install
 python3 scripts/build_global_data.py
+python3 scripts/refocus_economic_built_v3.py
 node scripts/build_pmtiles.mjs
 ```
 

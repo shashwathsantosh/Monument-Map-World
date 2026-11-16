@@ -1,10 +1,15 @@
 {
-  "name": "architecture-monument-atlas",
-  "version": "1.1.0",
-  "description": "Architecture Monument Atlas — Global Built Heritage & Chronological Atlas",
+  "name": "global-monument-atlas",
+  "version": "1.2.0",
+  "description": "Global Monument Atlas: Built Heritage, Statutory Registries & Conservation Economics Atlas",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "serve": "python3 scripts/serve.py --port 8766 --directory public",
+    "build:tiles": "node scripts/build_pmtiles.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shashwathsantosh/Monument-Map-World.git"
   },
   "keywords": [],
   "author": "",
